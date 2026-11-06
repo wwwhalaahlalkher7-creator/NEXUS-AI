@@ -17,7 +17,7 @@ pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-0.1-foundation",
+        stage: "alpha-0.3-bridge-foundation",
     }
 }
 
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-0.1-foundation");
+        assert_eq!(get_core_info().stage, "alpha-0.3-bridge-foundation");
     }
 
     #[test]

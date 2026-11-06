@@ -1,1 +1,1 @@
-GitHub Actions are intentionally not added in this first source batch. They will be introduced after the local project structure and toolchain versions are verified, as requested.
+The CI workflow is defined in `.github/workflows/ci.yml`. It validates Rust and Flutter, generates the bridge, and publishes a debug APK artifact. It does not deploy a backend or website.

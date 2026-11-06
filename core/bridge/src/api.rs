@@ -32,7 +32,7 @@ mod tests {
     fn bridge_api_returns_core_metadata() {
         let info = get_core_info_for_app();
         assert_eq!(info.name, "NEXUS AI");
-        assert_eq!(info.stage, "alpha-0.1-foundation");
+        assert_eq!(info.stage, "alpha-0.3-bridge-foundation");
     }
 
     #[test]

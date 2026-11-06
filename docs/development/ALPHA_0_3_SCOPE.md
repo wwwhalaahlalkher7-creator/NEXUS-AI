@@ -8,9 +8,9 @@
 - Bridge architecture and verification documentation.
 
 ## Important limitation
-Generated bindings and Android Gradle integration are not fabricated. They must be
-produced by the official generator on a machine with Flutter and Rust installed.
-The supplied script performs integration and generation.
+Generated bindings and Android Gradle integration are not hand-written. The official
+generator produces them locally or in the GitHub Actions workflow. CI also runs the
+Rust/Flutter checks and creates a debug Android APK artifact.
 
 ## Acceptance gate
 1. Generator succeeds without manual edits to generated code.
@@ -24,4 +24,4 @@ The supplied script performs integration and generation.
 - Moving SQLite repository operations into Rust.
 - Model loading and inference.
 - Resource telemetry and device networking.
-- CI/APK workflows, added after local bridge validation.
+- Model execution, device networking, and distributed task scheduling.

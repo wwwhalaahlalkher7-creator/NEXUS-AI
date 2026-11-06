@@ -1,7 +1,8 @@
 # flutter_rust_bridge v2 configuration.
+# The Flutter project and pubspec.yaml are at the repository root.
 rust_input: crate::api
-rust_root: ../../core/bridge
+rust_root: core/bridge
 dart_output: lib/src/rust
+rust_output: crate::frb_generated.rs
 type_64bit_int: true
 default_dart_async: true
-local: true

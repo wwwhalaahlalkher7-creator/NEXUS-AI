@@ -1,0 +1,95 @@
+name: NEXUS CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-build:
+    name: Verify Rust + Flutter and build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Verify toolchains
+        run: |
+          flutter --version
+          dart --version
+          rustc --version
+          cargo --version
+          java -version
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+      - name: Run Rust Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install Flutter Rust Bridge code generator
+        run: cargo install flutter_rust_bridge_codegen --version 2.13.0 --locked
+
+      - name: Create Android project scaffold
+        run: flutter create --platforms=android --org com.nexusai --project-name nexus_app .
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Integrate and generate Flutter Rust Bridge
+        run: |
+          flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
+          flutter_rust_bridge_codegen generate
+
+      - name: Check Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Analyze Flutter application
+        run: flutter analyze --no-pub
+
+      - name: Run Flutter tests
+        run: flutter test --no-pub
+
+      - name: Build debug ARM64 APK
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-android-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
