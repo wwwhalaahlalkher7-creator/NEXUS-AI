@@ -1,0 +1,7 @@
+# flutter_rust_bridge v2 configuration.
+rust_input: crate::api
+rust_root: ../../core/bridge
+dart_output: lib/src/rust
+type_64bit_int: true
+default_dart_async: true
+local: true

@@ -1,0 +1,11 @@
+[package]
+name = "nexus-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nexus-shared = { path = "../shared" }
+
+[lints]
+workspace = true
