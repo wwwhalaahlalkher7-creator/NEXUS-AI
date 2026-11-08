@@ -77,7 +77,7 @@ class _StatusCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'النسخة التأسيسية 0.1',
+                  'الأساس المحلي 0.5',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -85,7 +85,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'واجهة أولية — لا يوجد نموذج ذكاء اصطناعي نشط حالياً.',
+                  'مكتبة النماذج والتخزين المحلي قيد البناء — لا يوجد نموذج نشط حالياً.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),

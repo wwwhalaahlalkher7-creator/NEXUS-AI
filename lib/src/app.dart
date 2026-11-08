@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'features/dashboard/dashboard_page.dart';
-import 'features/agents/agents_page.dart';
+import 'features/agents/agents_page.dart';\nimport 'features/models/models_page.dart';
 
 class NexusHomePage extends StatefulWidget {
   const NexusHomePage({super.key});
@@ -15,11 +15,7 @@ class _NexusHomePageState extends State<NexusHomePage> {
 
   static const _pages = <Widget>[
     DashboardPage(),
-    _PlaceholderPage(
-      title: 'النماذج',
-      subtitle: 'إدارة النماذج المحلية ستُضاف في المرحلة التالية.',
-      icon: Icons.memory_outlined,
-    ),
+    ModelsPage(),
     AgentsPage(),
     _PlaceholderPage(
       title: 'الأجهزة',
