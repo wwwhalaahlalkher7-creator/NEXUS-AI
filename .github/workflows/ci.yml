@@ -90,6 +90,10 @@ jobs:
           # The template's sample API is unrelated to NEXUS and imports a
           # generated greet method that this Rust crate intentionally lacks.
           rm -f lib/src/rust/api/simple.dart
+          # FRB integration also adds a sample integration test for MyApp.
+          # NEXUS uses NexusApp and does not use the generated sample test.
+          rm -f integration_test/simple_test.dart
+          rmdir integration_test 2>/dev/null || true
 
       - name: Check Dart formatting
         run: dart format --output=none --set-exit-if-changed lib test
