@@ -76,17 +76,19 @@ jobs:
           cp -a "$scaffold_dir/android" ./android
           rm -rf "$scaffold_dir"
 
-      - name: Resolve Flutter dependencies
-        run: flutter pub get
-
       - name: Integrate and generate Flutter Rust Bridge
         run: |
           # FRB's integration template writes a sample lib/main.dart. Preserve
           # the real NEXUS entrypoint so the template cannot replace the app.
           cp lib/main.dart "$RUNNER_TEMP/nexus-main.dart"
+          cp pubspec.yaml "$RUNNER_TEMP/nexus-pubspec.yaml"
           flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
           flutter_rust_bridge_codegen generate
           cp "$RUNNER_TEMP/nexus-main.dart" lib/main.dart
+          # Keep the repository's real dependency declarations authoritative.
+          # The FRB sample integration must not replace SDK dependencies such
+          # as flutter_test with an unconstrained pub.dev dependency.
+          cp "$RUNNER_TEMP/nexus-pubspec.yaml" pubspec.yaml
           # The template's sample API is unrelated to NEXUS and imports a
           # generated greet method that this Rust crate intentionally lacks.
           rm -f lib/src/rust/api/simple.dart
@@ -94,6 +96,9 @@ jobs:
           # NEXUS uses NexusApp and does not use the generated sample test.
           rm -f integration_test/simple_test.dart
           rmdir integration_test 2>/dev/null || true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
 
       - name: Check Dart formatting
         run: dart format --output=none --set-exit-if-changed lib test
@@ -105,7 +110,7 @@ jobs:
         run: flutter test --no-pub
 
       - name: Build debug ARM64 APK
-        run: flutter build apk --debug --target-platform android-arm64
+        run: flutter build apk --debug --no-pub --target-platform android-arm64
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
