@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'features/dashboard/dashboard_page.dart';
-import 'features/agents/agents_page.dart';\nimport 'features/models/models_page.dart';
+import 'features/agents/agents_page.dart';
+import 'features/models/models_page.dart';
 
 class NexusHomePage extends StatefulWidget {
   const NexusHomePage({super.key});
