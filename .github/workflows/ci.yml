@@ -43,8 +43,6 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # The action's default also requests the removed legacy "tools" package.
-          # Command-line tools are installed by the action itself; platform-tools is sufficient here.
           packages: 'platform-tools'
 
       - name: Verify toolchains

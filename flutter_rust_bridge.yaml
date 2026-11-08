@@ -3,6 +3,6 @@
 rust_input: crate::api
 rust_root: core/bridge
 dart_output: lib/src/rust
-rust_output: crate::frb_generated.rs
+rust_output: core/bridge/src/frb_generated.rs
 type_64bit_int: true
 default_dart_async: true
