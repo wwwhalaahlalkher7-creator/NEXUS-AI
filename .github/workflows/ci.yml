@@ -81,11 +81,14 @@ jobs:
 
       - name: Integrate and generate Flutter Rust Bridge
         run: |
+          # FRB's integration template writes a sample lib/main.dart. Preserve
+          # the real NEXUS entrypoint so the template cannot replace the app.
+          cp lib/main.dart "$RUNNER_TEMP/nexus-main.dart"
           flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
           flutter_rust_bridge_codegen generate
-          # `integrate` overlays a sample API from the FRB template. This
-          # project exposes its own API in core/bridge/src/api.rs, so remove
-          # the unrelated template sample that calls crateApiSimpleGreet.
+          cp "$RUNNER_TEMP/nexus-main.dart" lib/main.dart
+          # The template's sample API is unrelated to NEXUS and imports a
+          # generated greet method that this Rust crate intentionally lacks.
           rm -f lib/src/rust/api/simple.dart
 
       - name: Check Dart formatting

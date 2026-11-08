@@ -66,7 +66,11 @@ class _StatusCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.verified_outlined, size: 30, color: scheme.onPrimaryContainer),
+          Icon(
+            Icons.verified_outlined,
+            size: 30,
+            color: scheme.onPrimaryContainer,
+          ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(

@@ -5,14 +5,14 @@ void main() {
   testWidgets(
     'dashboard shell renders without claiming an active model',
     (tester) async {
-    await tester.pumpWidget(const NexusApp());
+      await tester.pumpWidget(const NexusApp());
 
-    expect(find.text('NEXUS AI'), findsOneWidget);
-    expect(find.text('مرحباً بك في NEXUS'), findsOneWidget);
-    expect(
-      find.textContaining('لا يوجد نموذج ذكاء اصطناعي نشط'),
-      findsOneWidget,
-    );
-  },
-);
+      expect(find.text('NEXUS AI'), findsOneWidget);
+      expect(find.text('مرحباً بك في NEXUS'), findsOneWidget);
+      expect(
+        find.textContaining('لا يوجد نموذج ذكاء اصطناعي نشط'),
+        findsOneWidget,
+      );
+    },
+  );
 }
