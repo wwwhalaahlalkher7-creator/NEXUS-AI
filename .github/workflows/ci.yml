@@ -66,7 +66,15 @@ jobs:
         run: cargo install flutter_rust_bridge_codegen --version 2.13.0 --locked
 
       - name: Create Android project scaffold
-        run: flutter create --platforms=android --org com.nexusai --project-name nexus_app .
+        run: |
+          # Generate only the Android host project in a temporary directory.
+          # Do not run `flutter create` in the repository root: it can rewrite
+          # the existing Dart application files and invalidate widget tests.
+          scaffold_dir="$(mktemp -d)"
+          flutter create --platforms=android --org com.nexusai --project-name nexus_app "$scaffold_dir"
+          rm -rf android
+          cp -a "$scaffold_dir/android" ./android
+          rm -rf "$scaffold_dir"
 
       - name: Resolve Flutter dependencies
         run: flutter pub get
@@ -75,6 +83,10 @@ jobs:
         run: |
           flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
           flutter_rust_bridge_codegen generate
+          # `integrate` overlays a sample API from the FRB template. This
+          # project exposes its own API in core/bridge/src/api.rs, so remove
+          # the unrelated template sample that calls crateApiSimpleGreet.
+          rm -f lib/src/rust/api/simple.dart
 
       - name: Check Dart formatting
         run: dart format --output=none --set-exit-if-changed lib test
