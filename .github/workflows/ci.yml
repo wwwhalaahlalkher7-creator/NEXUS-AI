@@ -96,6 +96,9 @@ jobs:
           # NEXUS uses NexusApp and does not use the generated sample test.
           rm -f integration_test/simple_test.dart
           rmdir integration_test 2>/dev/null || true
+          # FRB also creates a sample integration-test driver that is not used by NEXUS.
+          rm -f test_driver/integration_test.dart
+          rmdir test_driver 2>/dev/null || true
 
       - name: Resolve Flutter dependencies
         run: flutter pub get
@@ -110,8 +113,24 @@ jobs:
       - name: Run Flutter tests
         run: flutter test --no-pub
 
-      - name: Build debug ARM64 APK
-        run: flutter build apk --debug --no-pub --target-platform android-arm64
+      - name: Cache Gradle dependencies
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug ARM64 APK (retry transient repository failures)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "APK build attempt ${attempt}/3"
+            if flutter build apk --debug --no-pub --target-platform android-arm64; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Build failed; waiting 30 seconds before retrying dependency downloads..."
+              sleep 30
+            fi
+          done
+          echo "APK build failed after 3 attempts."
+          exit 1
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
