@@ -194,8 +194,8 @@ fn skip_value(file: &mut File, file_size: u64, value_type: u32) -> Result<(), St
     let fixed_size = match value_type {
         0 | 1 | 7 => Some(1_u64),
         2 | 3 => Some(2),
-        4 | 5 | 6 => Some(4),
-        10 | 11 | 12 => Some(8),
+        4..=6 => Some(4),
+        10..=12 => Some(8),
         8 => {
             skip_string(file, file_size)?;
             None
@@ -233,8 +233,8 @@ fn primitive_size(value_type: u32) -> Option<u64> {
     match value_type {
         0 | 1 | 7 => Some(1),
         2 | 3 => Some(2),
-        4 | 5 | 6 => Some(4),
-        10 | 11 | 12 => Some(8),
+        4..=6 => Some(4),
+        10..=12 => Some(8),
         _ => None,
     }
 }
