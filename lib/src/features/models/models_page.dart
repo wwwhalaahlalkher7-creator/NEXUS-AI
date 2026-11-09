@@ -39,17 +39,23 @@ class _ModelsPageState extends State<ModelsPage> {
       context: context,
       builder: (_) => const _AddModelDialog(),
     );
-    if (model == null) return;
+    if (model == null) {
+      return;
+    }
 
     try {
       await _store.register(model);
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       _reload();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تمت إضافة النموذج إلى المكتبة المحلية')),
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذرت إضافة النموذج: $error')),
       );
@@ -57,11 +63,15 @@ class _ModelsPageState extends State<ModelsPage> {
   }
 
   Future<void> _importModel(ModelRecord model) async {
-    if (_importingModelIds.contains(model.id)) return;
+    if (_importingModelIds.contains(model.id)) {
+      return;
+    }
     setState(() => _importingModelIds.add(model.id));
     try {
       final imported = await _importService.importGguf(model);
-      if (imported == null || !mounted) return;
+      if (imported == null || !mounted) {
+        return;
+      }
       await _store.updateInstallState(
         model.id,
         status: ModelInstallStatus.installed,
@@ -76,7 +86,9 @@ class _ModelsPageState extends State<ModelsPage> {
         fileType: imported.inspection.fileType,
         parameterCount: imported.inspection.parameterCount,
       );
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       _reload();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -84,7 +96,9 @@ class _ModelsPageState extends State<ModelsPage> {
         ),
       );
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذر استيراد النموذج: $error')),
       );
@@ -113,14 +127,20 @@ class _ModelsPageState extends State<ModelsPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (confirmed != true) {
+      return;
+    }
 
     try {
       await _store.delete(model.id);
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       _reload();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذر حذف السجل: $error')),
       );
@@ -406,7 +426,9 @@ class _AddModelDialogState extends State<_AddModelDialog> {
   }
 
   void _submit() {
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = 'model-${DateTime.now().microsecondsSinceEpoch}';
     Navigator.pop(
@@ -466,7 +488,9 @@ class _AddModelDialogState extends State<_AddModelDialog> {
                 ),
               ],
               onChanged: (value) {
-                if (value != null) setState(() => _runtime = value);
+                if (value != null) {
+                  setState(() => _runtime = value);
+                }
               },
             ),
             const SizedBox(height: 10),
