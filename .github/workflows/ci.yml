@@ -76,6 +76,34 @@ jobs:
           cp -a "$scaffold_dir/android" ./android
           rm -rf "$scaffold_dir"
 
+      - name: Configure Maven Central mirror fallback
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          settings = Path("android/settings.gradle.kts")
+          if not settings.is_file():
+              raise SystemExit("Generated android/settings.gradle.kts was not found.")
+
+          content = settings.read_text(encoding="utf-8")
+          mirror = '        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }\\n'
+
+          # Add the mirror to pluginManagement and dependencyResolutionManagement
+          # before Maven Central, so Kotlin compiler artifacts can resolve without
+          # depending on the Maven Central -> GitHub release redirect.
+          if "maven-central.storage-download.googleapis.com" not in content:
+              content = content.replace("        mavenCentral()\\n", mirror + "        mavenCentral()\\n")
+
+          if "maven-central.storage-download.googleapis.com" not in content:
+              raise SystemExit("Could not add Maven mirror to Gradle repositories.")
+          if content.count("maven-central.storage-download.googleapis.com") < 2:
+              raise SystemExit("Expected mirror in both plugin and dependency repositories.")
+
+          settings.write_text(content, encoding="utf-8")
+          print("Configured Google-hosted Maven Central mirror fallback.")
+          PY
+
       - name: Integrate and generate Flutter Rust Bridge
         run: |
           # FRB's integration template writes a sample lib/main.dart. Preserve
