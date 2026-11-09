@@ -85,26 +85,46 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          settings = Path("android/settings.gradle.kts")
-          if not settings.is_file():
-              raise SystemExit("Generated android/settings.gradle.kts was not found.")
+          mirror_url = "https://maven-central.storage-download.googleapis.com/maven2/"
 
-          content = settings.read_text(encoding="utf-8")
-          mirror = '        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }\n'
+          def configure_repositories(path: Path) -> None:
+              if not path.is_file():
+                  raise SystemExit(f"Generated Gradle file was not found: {path}")
 
-          # Add the mirror to pluginManagement and dependencyResolutionManagement
-          # before Maven Central, so Kotlin compiler artifacts can resolve without
-          # depending on the Maven Central -> GitHub release redirect.
-          if "maven-central.storage-download.googleapis.com" not in content:
-              content = content.replace("        mavenCentral()\n", mirror + "        mavenCentral()\n")
+              lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+              # Remove prior copies so reruns are idempotent.
+              lines = [
+                  line for line in lines
+                  if mirror_url not in line
+              ]
 
-          if "maven-central.storage-download.googleapis.com" not in content:
-              raise SystemExit("Could not add Maven mirror to Gradle repositories.")
-          if content.count("maven-central.storage-download.googleapis.com") < 2:
-              raise SystemExit("Expected mirror in both plugin and dependency repositories.")
+              updated = []
+              maven_count = 0
+              for line in lines:
+                  if re.match(r"^\s*mavenCentral\(\)\s*(?://.*)?\r?\n?$", line):
+                      indent = re.match(r"^\s*", line).group(0)
+                      updated.append(
+                          f'{indent}maven {{ url = uri("{mirror_url}") }}\n'
+                      )
+                      maven_count += 1
+                  updated.append(line)
 
-          settings.write_text(content, encoding="utf-8")
-          print("Configured Google-hosted Maven Central mirror fallback.")
+              if maven_count == 0:
+                  raise SystemExit(f"No mavenCentral() repository found in {path}")
+
+              path.write_text("".join(updated), encoding="utf-8")
+              result = path.read_text(encoding="utf-8")
+              if result.count(mirror_url) != maven_count:
+                  raise SystemExit(f"Mirror verification failed for {path}")
+
+              print(f"Configured {maven_count} Maven Central mirror(s) in {path}")
+
+          import re
+
+          # Plugin resolution is configured in settings.gradle.kts.
+          # Application dependency resolution is configured in the root build.gradle.kts.
+          configure_repositories(Path("android/settings.gradle.kts"))
+          configure_repositories(Path("android/build.gradle.kts"))
           PY
 
       - name: Integrate and generate Flutter Rust Bridge
