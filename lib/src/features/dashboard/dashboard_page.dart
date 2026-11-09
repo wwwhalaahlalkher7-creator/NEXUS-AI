@@ -93,7 +93,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'يعرض التطبيق حالة اتصال نواة Rust مباشرة. تم توسيع فحص ملفات GGUF؛ لا يوجد محرك استدلال نشط حتى الآن.',
+                  'يعرض التطبيق حالة اتصال نواة Rust مباشرة. تم توسيع فحص ملفات GGUF؛ لا يوجد نموذج ذكاء اصطناعي نشط حالياً، ومحرك الاستدلال لم يُدمج بعد.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),
