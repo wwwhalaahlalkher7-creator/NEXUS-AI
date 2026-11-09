@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../../rust/api.dart' as rust_api;
+import '../../rust/api/simple.dart' as rust_api;
 import '../../rust/frb_generated.dart';
 import 'core_runtime_service.dart';
 import 'core_runtime_status.dart';

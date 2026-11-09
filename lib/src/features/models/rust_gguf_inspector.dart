@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import '../../rust/api.dart' as rust_api;
+import '../../rust/api/simple.dart' as rust_api;
 import '../../rust/frb_generated.dart';
 
 class GgufInspection {
