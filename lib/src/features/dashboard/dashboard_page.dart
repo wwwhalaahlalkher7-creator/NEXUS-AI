@@ -85,7 +85,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'مكتبة النماذج والتخزين المحلي قيد البناء — لا يوجد نموذج نشط حالياً.',
+                  'مكتبة النماذج والتخزين المحلي قيد البناء — لا يوجد نموذج ذكاء اصطناعي نشط حالياً.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),
