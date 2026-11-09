@@ -133,8 +133,18 @@ jobs:
           # the real NEXUS entrypoint so the template cannot replace the app.
           cp lib/main.dart "$RUNNER_TEMP/nexus-main.dart"
           cp pubspec.yaml "$RUNNER_TEMP/nexus-pubspec.yaml"
+          cp flutter_rust_bridge.yaml "$RUNNER_TEMP/nexus-frb-config.yaml"
+
           flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
-          flutter_rust_bridge_codegen generate
+
+          # `integrate` may rewrite the bridge configuration for its sample
+          # layout. Restore NEXUS's explicit paths before generating bindings.
+          cp "$RUNNER_TEMP/nexus-frb-config.yaml" flutter_rust_bridge.yaml
+
+          # Always generate from the checked-in NEXUS configuration, rather
+          # than relying on whichever config the integration template leaves.
+          flutter_rust_bridge_codegen --verbose generate --config-file flutter_rust_bridge.yaml
+
           cp "$RUNNER_TEMP/nexus-main.dart" lib/main.dart
           # Keep the repository's real dependency declarations authoritative.
           # The FRB sample integration must not replace SDK dependencies such
@@ -150,6 +160,24 @@ jobs:
           # FRB also creates a sample integration-test driver that is not used by NEXUS.
           rm -f test_driver/integration_test.dart
           rmdir test_driver 2>/dev/null || true
+
+      - name: Verify generated Flutter Rust Bridge bindings
+        shell: bash
+        run: |
+          echo "Generated bridge files:"
+          if [ -d lib/src/rust ]; then
+            find lib/src/rust -maxdepth 4 -type f -print | sort
+          else
+            echo "lib/src/rust directory was not generated."
+          fi
+          test -s lib/src/rust/api.dart || {
+            echo "::error::FRB did not generate lib/src/rust/api.dart. Check the codegen output above and flutter_rust_bridge.yaml."
+            exit 1
+          }
+          test -s lib/src/rust/frb_generated.dart || {
+            echo "::error::FRB did not generate lib/src/rust/frb_generated.dart."
+            exit 1
+          }
 
       - name: Resolve Flutter dependencies
         run: flutter pub get
