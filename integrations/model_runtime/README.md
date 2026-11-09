@@ -1,12 +1,14 @@
 # Model runtime adapter
 
-This directory reserves the integration boundary for local inference engines.
+## Current status — Alpha 0.8
+The Flutter application now reaches the Rust core through Flutter Rust Bridge and reads a runtime diagnostics snapshot. The bridge reports that inference is unavailable because no native inference backend is attached.
 
-Planned contract:
-- discover runtime availability;
-- inspect model metadata;
-- load/unload a model with explicit resource limits;
-- stream generated tokens;
-- cancel a running generation.
+## Planned llama.cpp adapter contract
+- Discover whether the native backend is available on this ABI.
+- Validate a model file and its metadata before loading.
+- Load/unload with explicit memory and context limits.
+- Report lifecycle state only after backend confirmation.
+- Stream generated tokens and support cancellation.
+- Surface structured errors without exposing filesystem paths unnecessarily.
 
-**Current status:** documentation only. llama.cpp is not linked, no model is bundled, and no inference is available in Alpha 0.1.
+GGUF files can be imported and their bounded metadata directory inspected in Alpha 0.8. No model is loaded or executed.

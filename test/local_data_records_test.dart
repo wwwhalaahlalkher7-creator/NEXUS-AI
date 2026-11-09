@@ -47,6 +47,13 @@ void main() {
       status: ModelInstallStatus.registered,
       createdAtUnixMs: 10,
       updatedAtUnixMs: 20,
+      architecture: 'llama',
+      ggufModelName: 'Test model metadata',
+      contextLength: 4096,
+      blockCount: 32,
+      embeddingLength: 2048,
+      fileType: 15,
+      parameterCount: 3000000000,
     );
 
     final restored = ModelRecord.fromMap(record.toMap());
@@ -54,5 +61,10 @@ void main() {
     expect(restored.runtime, ModelRuntime.llamaCpp);
     expect(restored.status, ModelInstallStatus.registered);
     expect(restored.localPath, isNull);
+    expect(restored.architecture, 'llama');
+    expect(restored.contextLength, 4096);
+    expect(restored.blockCount, 32);
+    expect(restored.embeddingLength, 2048);
+    expect(restored.parameterCount, 3000000000);
   });
 }

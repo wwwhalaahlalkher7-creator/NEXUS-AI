@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import 'model_record.dart';
 import 'model_repository.dart';
+import 'model_import_service.dart';
 
 class ModelsPage extends StatefulWidget {
-  const ModelsPage({super.key, this.store});
+  const ModelsPage({super.key, this.store, this.importService});
 
   final ModelStore? store;
+  final ModelImportService? importService;
 
   @override
   State<ModelsPage> createState() => _ModelsPageState();
@@ -14,12 +16,15 @@ class ModelsPage extends StatefulWidget {
 
 class _ModelsPageState extends State<ModelsPage> {
   late final ModelStore _store;
+  late final ModelImportService _importService;
   late Future<List<ModelRecord>> _modelsFuture;
+  final Set<String> _importingModelIds = {};
 
   @override
   void initState() {
     super.initState();
     _store = widget.store ?? ModelRepository();
+    _importService = widget.importService ?? LocalGgufModelImportService();
     _modelsFuture = _store.list();
   }
 
@@ -48,6 +53,45 @@ class _ModelsPageState extends State<ModelsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('تعذرت إضافة النموذج: $error')),
       );
+    }
+  }
+
+  Future<void> _importModel(ModelRecord model) async {
+    if (_importingModelIds.contains(model.id)) return;
+    setState(() => _importingModelIds.add(model.id));
+    try {
+      final imported = await _importService.importGguf(model);
+      if (imported == null || !mounted) return;
+      await _store.updateInstallState(
+        model.id,
+        status: ModelInstallStatus.installed,
+        localPath: imported.path,
+        sizeBytes: imported.sizeBytes,
+        architecture: imported.inspection.architecture,
+        ggufModelName: imported.inspection.modelName,
+        tokenizerModel: imported.inspection.tokenizerModel,
+        contextLength: imported.inspection.contextLength,
+        blockCount: imported.inspection.blockCount,
+        embeddingLength: imported.inspection.embeddingLength,
+        fileType: imported.inspection.fileType,
+        parameterCount: imported.inspection.parameterCount,
+      );
+      if (!mounted) return;
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم استيراد الملف وتحليل بياناته الوصفية. النموذج غير محمّل بعد.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر استيراد النموذج: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _importingModelIds.remove(model.id));
+      }
     }
   }
 
@@ -144,33 +188,99 @@ class _ModelsPageState extends State<ModelsPage> {
                 for (final model in models)
                   Card(
                     margin: const EdgeInsets.only(bottom: 10),
-                    child: ListTile(
-                      contentPadding: const EdgeInsetsDirectional.only(
-                        start: 16,
-                        end: 8,
-                        top: 6,
-                        bottom: 6,
-                      ),
-                      leading: CircleAvatar(
-                        backgroundColor:
-                            Theme.of(context).colorScheme.secondaryContainer,
-                        child: const Icon(Icons.memory_outlined),
-                      ),
-                      title: Text(
-                        model.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '${_runtimeLabel(model.runtime)} · مُسجّل فقط، غير مثبت',
-                        ),
-                      ),
-                      trailing: IconButton(
-                        tooltip: 'حذف السجل',
-                        onPressed: () => _deleteModel(model),
-                        icon: const Icon(Icons.delete_outline),
+                    child: Padding(
+                      padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 8, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: CircleAvatar(
+                              backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                              child: const Icon(Icons.memory_outlined),
+                            ),
+                            title: Text(
+                              model.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(_modelStatusLabel(model)),
+                            ),
+                            trailing: IconButton(
+                              tooltip: 'حذف السجل',
+                              onPressed: () => _deleteModel(model),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ),
+                          if (model.runtime == ModelRuntime.llamaCpp)
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: TextButton.icon(
+                                onPressed: _importingModelIds.contains(model.id)
+                                    ? null
+                                    : () => _importModel(model),
+                                icon: _importingModelIds.contains(model.id)
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.file_open_outlined),
+                                label: Text(
+                                  _importingModelIds.contains(model.id)
+                                      ? 'جارٍ فحص واستيراد الملف…'
+                                      : model.status == ModelInstallStatus.installed
+                                          ? 'استبدال ملف النموذج'
+                                          : 'اختيار ملف GGUF',
+                                ),
+                              ),
+                            ),
+                          if (model.status == ModelInstallStatus.installed && model.sizeBytes != null)
+                            Padding(
+                              padding: const EdgeInsetsDirectional.only(start: 12, end: 8, bottom: 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${_formatBytes(model.sizeBytes!)} · مثبت محلياً، غير محمّل',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                  if (model.architecture != null || model.contextLength != null || model.blockCount != null) ...[
+                                    const SizedBox(height: 6),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 4,
+                                      children: [
+                                        if (model.architecture != null)
+                                          _MetadataChip(label: 'المعمارية: ${model.architecture}'),
+                                        if (model.contextLength != null)
+                                          _MetadataChip(label: 'السياق: ${_formatCount(model.contextLength!)}'),
+                                        if (model.blockCount != null)
+                                          _MetadataChip(label: 'الطبقات: ${model.blockCount}'),
+                                        if (model.embeddingLength != null)
+                                          _MetadataChip(label: 'Embedding: ${model.embeddingLength}'),
+                                        if (model.parameterCount != null)
+                                          _MetadataChip(label: 'المعاملات: ${_formatCount(model.parameterCount!)}'),
+                                      ],
+                                    ),
+                                  ],
+                                  if (model.ggufModelName != null || model.tokenizerModel != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      [model.ggufModelName, model.tokenizerModel]
+                                          .whereType<String>()
+                                          .join(' · '),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -182,11 +292,56 @@ class _ModelsPageState extends State<ModelsPage> {
     );
   }
 
+  String _modelStatusLabel(ModelRecord model) {
+    final runtime = _runtimeLabel(model.runtime);
+    return switch (model.status) {
+      ModelInstallStatus.registered => '$runtime · مُسجّل فقط، لا يوجد ملف محلي',
+      ModelInstallStatus.installed => '$runtime · ملف GGUF موجود، غير محمّل',
+      ModelInstallStatus.unavailable => '$runtime · الملف غير متاح',
+    };
+  }
+
+  String _formatCount(int value) {
+    if (value >= 1000000000) return '${(value / 1000000000).toStringAsFixed(1)}B';
+    if (value >= 1000000) return '${(value / 1000000).toStringAsFixed(1)}M';
+    if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}K';
+    return '$value';
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '$bytes B';
+  }
+
   String _runtimeLabel(ModelRuntime runtime) {
     return switch (runtime) {
       ModelRuntime.llamaCpp => 'llama.cpp',
       ModelRuntime.external => 'مصدر خارجي',
     };
+  }
+}
+
+class _MetadataChip extends StatelessWidget {
+  const _MetadataChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      label: Text(label),
+      padding: EdgeInsets.zero,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
   }
 }
 

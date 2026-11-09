@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../runtime/core_runtime_card.dart';
+import '../runtime/core_runtime_service.dart';
+import '../runtime/rust_core_runtime_service.dart';
+
 class DashboardPage extends StatelessWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, this.runtimeService});
+
+  final CoreRuntimeService? runtimeService;
 
   @override
   Widget build(BuildContext context) {
@@ -24,13 +30,15 @@ class DashboardPage extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         const _StatusCard(),
+        const SizedBox(height: 12),
+        CoreRuntimeCard(service: runtimeService ?? RustCoreRuntimeService()),
         const SizedBox(height: 16),
         Text('مكونات المنصة', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         const _FeatureTile(
           icon: Icons.memory_outlined,
           title: 'محرك النماذج',
-          description: 'واجهة تعريفية فقط؛ لم يتم ربط llama.cpp بعد.',
+          description: 'واجهة الربط مع Rust مضافة؛ محرك llama.cpp لم يُدمج بعد.',
         ),
         const _FeatureTile(
           icon: Icons.hub_outlined,
@@ -77,7 +85,7 @@ class _StatusCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'الأساس المحلي 0.5',
+                  'تكامل نواة Rust — Alpha 0.8',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -85,7 +93,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'مكتبة النماذج والتخزين المحلي قيد البناء — لا يوجد نموذج ذكاء اصطناعي نشط حالياً.',
+                  'يعرض التطبيق حالة اتصال نواة Rust مباشرة. تم توسيع فحص ملفات GGUF؛ لا يوجد محرك استدلال نشط حتى الآن.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),

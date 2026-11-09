@@ -1,6 +1,8 @@
 //! NEXUS runtime foundation.
-//! The current registry is process-local and intentionally not presented as
-//! persistent storage. SQLite is scheduled for the next implementation phase.
+//! Runtime diagnostics are exposed through the Flutter bridge. Model inference
+//! remains unavailable until a native inference backend is integrated.
+
+pub mod gguf;
 
 use std::collections::BTreeMap;
 
@@ -17,7 +19,7 @@ pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-0.3-bridge-foundation",
+        stage: "alpha-0.8-gguf-metadata-inspection",
     }
 }
 
@@ -63,7 +65,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-0.3-bridge-foundation");
+        assert_eq!(get_core_info().stage, "alpha-0.8-gguf-metadata-inspection");
     }
 
     #[test]

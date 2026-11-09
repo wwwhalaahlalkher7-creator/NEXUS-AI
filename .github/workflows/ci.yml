@@ -53,6 +53,9 @@ jobs:
           cargo --version
           java -version
 
+      - name: Format Rust sources
+        run: cargo fmt --all
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
@@ -87,13 +90,13 @@ jobs:
               raise SystemExit("Generated android/settings.gradle.kts was not found.")
 
           content = settings.read_text(encoding="utf-8")
-          mirror = '        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }\\n'
+          mirror = '        maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2/") }\n'
 
           # Add the mirror to pluginManagement and dependencyResolutionManagement
           # before Maven Central, so Kotlin compiler artifacts can resolve without
           # depending on the Maven Central -> GitHub release redirect.
           if "maven-central.storage-download.googleapis.com" not in content:
-              content = content.replace("        mavenCentral()\\n", mirror + "        mavenCentral()\\n")
+              content = content.replace("        mavenCentral()\n", mirror + "        mavenCentral()\n")
 
           if "maven-central.storage-download.googleapis.com" not in content:
               raise SystemExit("Could not add Maven mirror to Gradle repositories.")

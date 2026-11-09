@@ -6,7 +6,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'nexus_local.db';
-  static const _databaseVersion = 2;
+  static const _databaseVersion = 3;
 
   Database? _database;
 
@@ -25,10 +25,14 @@ class LocalDatabase {
       onCreate: (db, version) async {
         await _createAgentsTable(db);
         await _createV2Tables(db);
+        await _upgradeV3Models(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await _createV2Tables(db);
+        }
+        if (oldVersion < 3) {
+          await _upgradeV3Models(db);
         }
       },
     );
@@ -105,4 +109,16 @@ Future<void> _createV2Tables(DatabaseExecutor db) async {
     'CREATE INDEX idx_messages_conversation_created '
     'ON messages(conversation_id, created_at_unix_ms ASC)',
   );
+}
+
+
+Future<void> _upgradeV3Models(DatabaseExecutor db) async {
+  await db.execute('ALTER TABLE models ADD COLUMN architecture TEXT');
+  await db.execute('ALTER TABLE models ADD COLUMN gguf_model_name TEXT');
+  await db.execute('ALTER TABLE models ADD COLUMN tokenizer_model TEXT');
+  await db.execute('ALTER TABLE models ADD COLUMN context_length INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN block_count INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN embedding_length INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN file_type INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN parameter_count INTEGER');
 }

@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'features/dashboard/dashboard_page.dart';
 import 'features/agents/agents_page.dart';
 import 'features/models/models_page.dart';
+import 'features/runtime/core_runtime_service.dart';
 
 class NexusHomePage extends StatefulWidget {
-  const NexusHomePage({super.key});
+  const NexusHomePage({super.key, this.runtimeService});
+
+  final CoreRuntimeService? runtimeService;
 
   @override
   State<NexusHomePage> createState() => _NexusHomePageState();
@@ -13,22 +16,27 @@ class NexusHomePage extends StatefulWidget {
 
 class _NexusHomePageState extends State<NexusHomePage> {
   int _selectedIndex = 0;
+  late final List<Widget> _pages;
 
-  static const _pages = <Widget>[
-    DashboardPage(),
-    ModelsPage(),
-    AgentsPage(),
-    _PlaceholderPage(
-      title: 'الأجهزة',
-      subtitle: 'اكتشاف الأجهزة والاقتران لم يُفعّلا بعد.',
-      icon: Icons.devices_outlined,
-    ),
-    _PlaceholderPage(
-      title: 'الإعدادات',
-      subtitle: 'إعدادات المنصة ستُبنى تدريجياً.',
-      icon: Icons.settings_outlined,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      DashboardPage(runtimeService: widget.runtimeService),
+      const ModelsPage(),
+      const AgentsPage(),
+      const _PlaceholderPage(
+        title: 'الأجهزة',
+        subtitle: 'اكتشاف الأجهزة والاقتران لم يُفعّلا بعد.',
+        icon: Icons.devices_outlined,
+      ),
+      const _PlaceholderPage(
+        title: 'الإعدادات',
+        subtitle: 'إعدادات المنصة ستُبنى تدريجياً.',
+        icon: Icons.settings_outlined,
+      ),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {

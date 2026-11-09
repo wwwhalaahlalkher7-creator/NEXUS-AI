@@ -1,0 +1,70 @@
+import 'dart:io';
+
+import '../../rust/api.dart' as rust_api;
+import '../../rust/frb_generated.dart';
+
+class GgufInspection {
+  const GgufInspection({
+    required this.validHeader,
+    required this.fileName,
+    required this.sizeBytes,
+    required this.formatVersion,
+    required this.tensorCount,
+    required this.metadataCount,
+    required this.message,
+    this.architecture,
+    this.modelName,
+    this.tokenizerModel,
+    this.contextLength,
+    this.blockCount,
+    this.embeddingLength,
+    this.fileType,
+    this.parameterCount,
+  });
+
+  final bool validHeader;
+  final String fileName;
+  final int sizeBytes;
+  final int formatVersion;
+  final int tensorCount;
+  final int metadataCount;
+  final String? architecture;
+  final String? modelName;
+  final String? tokenizerModel;
+  final int? contextLength;
+  final int? blockCount;
+  final int? embeddingLength;
+  final int? fileType;
+  final int? parameterCount;
+  final String message;
+}
+
+class RustGgufInspector {
+  static Future<void>? _initialization;
+
+  Future<GgufInspection> inspect(String path) async {
+    if (!Platform.isAndroid) {
+      throw UnsupportedError('فحص ملفات GGUF عبر Rust متاح على Android حالياً.');
+    }
+    _initialization ??= RustLib.init();
+    await _initialization;
+    final result = await rust_api.inspectGgufModelFile(path: path);
+    return GgufInspection(
+      validHeader: result.validHeader,
+      fileName: result.fileName,
+      sizeBytes: result.sizeBytes,
+      formatVersion: result.formatVersion,
+      tensorCount: result.tensorCount,
+      metadataCount: result.metadataCount,
+      architecture: result.architecture,
+      modelName: result.modelName,
+      tokenizerModel: result.tokenizerModel,
+      contextLength: result.contextLength,
+      blockCount: result.blockCount,
+      embeddingLength: result.embeddingLength,
+      fileType: result.fileType,
+      parameterCount: result.parameterCount,
+      message: result.message,
+    );
+  }
+}

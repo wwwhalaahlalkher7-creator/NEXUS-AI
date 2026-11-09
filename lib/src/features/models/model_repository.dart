@@ -6,6 +6,20 @@ import 'model_record.dart';
 abstract interface class ModelStore {
   Future<void> register(ModelRecord model);
   Future<List<ModelRecord>> list();
+  Future<void> updateInstallState(
+    String id, {
+    required ModelInstallStatus status,
+    String? localPath,
+    int? sizeBytes,
+    String? architecture,
+    String? ggufModelName,
+    String? tokenizerModel,
+    int? contextLength,
+    int? blockCount,
+    int? embeddingLength,
+    int? fileType,
+    int? parameterCount,
+  });
   Future<void> delete(String id);
 }
 
@@ -47,11 +61,20 @@ class ModelRepository implements ModelStore {
     return ModelRecord.fromMap(rows.single);
   }
 
+  @override
   Future<void> updateInstallState(
     String id, {
     required ModelInstallStatus status,
     String? localPath,
     int? sizeBytes,
+    String? architecture,
+    String? ggufModelName,
+    String? tokenizerModel,
+    int? contextLength,
+    int? blockCount,
+    int? embeddingLength,
+    int? fileType,
+    int? parameterCount,
   }) async {
     final db = await _localDatabase.database;
     final changed = await db.update(
@@ -60,6 +83,14 @@ class ModelRepository implements ModelStore {
         'status': status.name,
         'local_path': localPath,
         'size_bytes': sizeBytes,
+        'architecture': architecture,
+        'gguf_model_name': ggufModelName,
+        'tokenizer_model': tokenizerModel,
+        'context_length': contextLength,
+        'block_count': blockCount,
+        'embedding_length': embeddingLength,
+        'file_type': fileType,
+        'parameter_count': parameterCount,
         'updated_at_unix_ms': DateTime.now().millisecondsSinceEpoch,
       },
       where: 'id = ?',
