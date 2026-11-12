@@ -1,8 +1,10 @@
 //! NEXUS runtime foundation.
-//! Runtime diagnostics are exposed through the Flutter bridge. Model inference
-//! remains unavailable until a native inference backend is integrated.
+//! Runtime diagnostics are exposed through the Flutter bridge. The Android
+//! llama.cpp shared adapter can be initialized, but model loading and inference
+//! remain unavailable until the next integration stage.
 
 pub mod gguf;
+pub mod native;
 
 use std::collections::BTreeMap;
 
@@ -15,11 +17,19 @@ pub struct CoreInfo {
     pub stage: &'static str,
 }
 
+
+/// Reports whether the Android llama.cpp shared adapter can be loaded and
+/// whether its native backend initialization succeeded. This does not mean
+/// that a GGUF model is loaded or text inference is available.
+pub fn native_engine_status() -> native::engine::NativeEngineStatus {
+    native::engine::native_engine_status()
+}
+
 pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-0.8-gguf-metadata-inspection",
+        stage: "alpha-1.4-llama-native-foundation",
     }
 }
 
@@ -65,7 +75,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-0.8-gguf-metadata-inspection");
+        assert_eq!(get_core_info().stage, "alpha-1.4-llama-native-foundation");
     }
 
     #[test]

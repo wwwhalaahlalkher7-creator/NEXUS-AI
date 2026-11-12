@@ -43,3 +43,7 @@ A debug APK is for installation/testing only, not a signed Play Store release.
 
 Bridge acceptance still requires verifying both exported Rust functions from Flutter
 on a physical Android device; a successful code-generation step alone is insufficient.
+
+## llama.cpp native adapter (Alpha 1.4)
+
+The Rust runtime now dynamically loads the Android ARM64 `libnexus_llama_probe.so` adapter. That adapter links the pinned upstream llama.cpp shared library and exposes backend initialization/version functions only. The library is packaged by the Android CI build through `jniLibs`. This is intentionally separate from Flutter Rust Bridge's generated API: FRB invokes safe Rust diagnostics, and Rust encapsulates the dynamic C ABI boundary. Model loading and inference are not available in Alpha 1.4. See `LLAMA_CPP_ANDROID.md`.

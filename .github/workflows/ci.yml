@@ -20,8 +20,16 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout NEXUS
         uses: actions/checkout@v4
+
+      - name: Checkout pinned llama.cpp source
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: cd959bae99ff4bed22bef2604f45241c09bbb8c8
+          path: third_party/llama.cpp
+          persist-credentials: false
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -45,6 +53,19 @@ jobs:
         with:
           packages: 'platform-tools'
 
+      - name: Install pinned Android NDK
+        run: |
+          sdkmanager --install "ndk;30.0.16248370"
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$sdk_root"
+          ndk_root="$sdk_root/ndk/30.0.16248370"
+          {
+            echo "ANDROID_NDK=$ndk_root"
+            echo "ANDROID_NDK_HOME=$ndk_root"
+            echo "ANDROID_NDK_ROOT=$ndk_root"
+          } >> "$GITHUB_ENV"
+          test -f "$ndk_root/build/cmake/android.toolchain.cmake"
+
       - name: Verify toolchains
         run: |
           flutter --version
@@ -52,18 +73,6 @@ jobs:
           rustc --version
           cargo --version
           java -version
-
-      - name: Format Rust sources
-        run: cargo fmt --all
-
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Rust tests
-        run: cargo test --workspace
-
-      - name: Run Rust Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Install Flutter Rust Bridge code generator
         run: cargo install flutter_rust_bridge_codegen --version 2.13.0 --locked
@@ -78,6 +87,111 @@ jobs:
           rm -rf android
           cp -a "$scaffold_dir/android" ./android
           rm -rf "$scaffold_dir"
+          # The native libraries are compiled against Android API 28; keep the
+          # app's declared minimum SDK aligned with that native requirement.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          gradle = Path("android/app/build.gradle.kts")
+          content = gradle.read_text()
+          updated, replacements = re.subn(
+              r"(?m)^(\s*)minSdk\s*=\s*(?:flutter\.minSdkVersion|\d+)\s*$",
+              r"\g<1>minSdk = 28",
+              content,
+          )
+          if replacements != 1:
+              raise SystemExit(f"Expected one Flutter minSdk declaration, found {replacements}")
+          gradle.write_text(updated)
+          PY
+
+      - name: Build llama.cpp native adapter for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          ninja --version
+          test -f "$ANDROID_NDK/build/cmake/android.toolchain.cmake"
+          cmake -S native/llama -B build/llama-android -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared \
+            -DLLAMA_CPP_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/llama.cpp" \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/build/llama-install" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_BUILD_IS_DEV=OFF \
+            -DGGML_BACKEND_DL=OFF \
+            -DGGML_CPU=ON \
+            -DGGML_CPU_ALL_VARIANTS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_LLAMAFILE=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DLLAMA_BUILD_COMMON=OFF \
+            -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF
+          cmake --build build/llama-android --target nexus_llama_probe --parallel 2
+          cmake --install build/llama-android --config Release
+
+          jni_dir="$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
+          install_dir="$GITHUB_WORKSPACE/build/llama-install/lib"
+          mkdir -p "$jni_dir"
+
+          probe="$(find "$install_dir" -maxdepth 1 -type f -name 'libnexus_llama_probe.so' -print -quit)"
+          test -n "$probe"
+          cp "$probe" "$jni_dir/libnexus_llama_probe.so"
+
+          libcxx_shared="$(find "$ANDROID_NDK/toolchains/llvm/prebuilt" \
+            -path '*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so' \
+            -print -quit)"
+          test -n "$libcxx_shared"
+          cp "$libcxx_shared" "$jni_dir/libc++_shared.so"
+
+          test -s "$jni_dir/libnexus_llama_probe.so"
+          test -s "$jni_dir/libc++_shared.so"
+          echo "Packaged native libraries:"
+          ls -lh "$jni_dir"
+          readelf -h "$jni_dir/libnexus_llama_probe.so" | grep -F 'AArch64'
+          readelf -h "$jni_dir/libc++_shared.so" | grep -F 'AArch64'
+          readelf -Ws "$jni_dir/libnexus_llama_probe.so" | grep -E 'nexus_llama_backend_init|nexus_llama_version'
+
+          # Verify every non-platform dependency of the adapter is present in
+          # the APK's JNI directory. System dependencies must exist in the NDK.
+          sysroot_lib="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
+          python3 - "$jni_dir" "$sysroot_lib" <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          jni_dir = Path(sys.argv[1])
+          sysroot_lib = Path(sys.argv[2])
+          packaged = {path.name for path in jni_dir.glob("*.so")}
+          errors = []
+          for library in sorted(jni_dir.glob("*.so")):
+              result = subprocess.run(
+                  ["readelf", "-d", str(library)],
+                  check=True, capture_output=True, text=True
+              )
+              for dependency in re.findall(r"Shared library: \[(.*?)\]", result.stdout):
+                  if dependency in packaged:
+                      continue
+                  if (sysroot_lib / dependency).is_file() or any(
+                      candidate.is_file()
+                      for candidate in sysroot_lib.glob(f"*/{dependency}")
+                  ):
+                      continue
+                  errors.append(f"{library.name} requires missing {dependency}")
+          if errors:
+              raise SystemExit("\n".join(errors))
+          print("Native shared-library dependency closure verified.")
+          PY
 
       - name: Configure Maven Central mirror fallback
         shell: bash
@@ -134,16 +248,24 @@ jobs:
           cp lib/main.dart "$RUNNER_TEMP/nexus-main.dart"
           cp pubspec.yaml "$RUNNER_TEMP/nexus-pubspec.yaml"
           cp flutter_rust_bridge.yaml "$RUNNER_TEMP/nexus-frb-config.yaml"
+          cp core/bridge/Cargo.toml "$RUNNER_TEMP/nexus-bridge-Cargo.toml"
+          cp core/bridge/src/lib.rs "$RUNNER_TEMP/nexus-bridge-lib.rs"
+          cp -a core/bridge/src/api "$RUNNER_TEMP/nexus-bridge-api"
 
-          flutter_rust_bridge_codegen integrate --rust-crate-dir core/bridge
+          flutter_rust_bridge_codegen integrate --integration-backend cargokit --rust-crate-dir core/bridge
 
           # `integrate` may rewrite the bridge configuration for its sample
           # layout. Restore NEXUS's explicit paths before generating bindings.
           cp "$RUNNER_TEMP/nexus-frb-config.yaml" flutter_rust_bridge.yaml
+          cp "$RUNNER_TEMP/nexus-bridge-Cargo.toml" core/bridge/Cargo.toml
+          cp "$RUNNER_TEMP/nexus-bridge-lib.rs" core/bridge/src/lib.rs
+          rm -rf core/bridge/src/api
+          cp -a "$RUNNER_TEMP/nexus-bridge-api" core/bridge/src/api
 
           # Always generate from the checked-in NEXUS configuration, rather
           # than relying on whichever config the integration template leaves.
           flutter_rust_bridge_codegen --verbose generate --config-file flutter_rust_bridge.yaml
+          python3 scripts/allow_generated_ffi.py
 
           cp "$RUNNER_TEMP/nexus-main.dart" lib/main.dart
           # Keep the repository's real dependency declarations authoritative.
@@ -159,6 +281,10 @@ jobs:
           # FRB also creates a sample integration-test driver that is not used by NEXUS.
           rm -f test_driver/integration_test.dart
           rmdir test_driver 2>/dev/null || true
+          # The generated Cargokit package must remain resolvable after the
+          # NEXUS dependency manifest is restored.
+          test -s rust_builder/pubspec.yaml
+          grep -A1 -F '  rust_builder:' pubspec.yaml | grep -F 'path: rust_builder'
 
       - name: Verify generated Flutter Rust Bridge bindings
         shell: bash
@@ -177,6 +303,15 @@ jobs:
             echo "::error::FRB did not generate lib/src/rust/frb_generated.dart."
             exit 1
           }
+          test -s core/bridge/src/frb_generated.rs
+          grep -B1 -F 'mod frb_generated;' core/bridge/src/lib.rs | grep -F '#[allow(unsafe_code)]'
+
+      - name: Format and validate Rust workspace including generated FFI
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Resolve Flutter dependencies
         run: flutter pub get
@@ -209,6 +344,14 @@ jobs:
           done
           echo "APK build failed after 3 attempts."
           exit 1
+
+      - name: Verify llama.cpp libraries are packaged in the APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="build/app/outputs/flutter-apk/app-debug.apk"
+          unzip -l "$apk" | grep -F 'lib/arm64-v8a/libnexus_llama_probe.so'
+          unzip -l "$apk" | grep -F 'lib/arm64-v8a/libc++_shared.so'
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

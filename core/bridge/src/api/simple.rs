@@ -24,10 +24,32 @@ pub fn get_core_info_for_app() -> CoreInfoDto {
 /// deliberately does not claim that an inference backend or model is loaded.
 pub fn runtime_diagnostics_json() -> String {
     let info = get_core_info();
+    let native = nexus_runtime::native_engine_status();
+    let version = native
+        .version
+        .as_deref()
+        .map(|value| format!("\"{}\"", json_escape(value)))
+        .unwrap_or_else(|| "null".to_owned());
+    let message = json_escape(&native.message);
+    let native_available = if native.available { "true" } else { "false" };
+    let runtime_engine = if native.available {
+        "llama.cpp-native-initialized"
+    } else {
+        "llama.cpp-native-unavailable"
+    };
     format!(
-        r#"{{"core_name":"{}","core_version":"{}","stage":"{}","bridge_connected":true,"runtime_engine":"not_attached","inference_available":false,"model_registry":"flutter_sqlite","agent_registry":"rust_in_memory"}}"#,
-        info.name, info.version, info.stage
+        r#"{{"core_name":"{}","core_version":"{}","stage":"{}","bridge_connected":true,"runtime_engine":"{}","native_engine_available":{},"native_engine_version":{},"native_engine_message":"{}","inference_available":false,"model_registry":"flutter_sqlite","agent_registry":"rust_in_memory","model_loaded":false}}"#,
+        info.name, info.version, info.stage, runtime_engine, native_available, version, message
     )
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 
@@ -105,7 +127,7 @@ mod tests {
     fn bridge_api_returns_core_metadata() {
         let info = get_core_info_for_app();
         assert_eq!(info.name, "NEXUS AI");
-        assert_eq!(info.stage, "alpha-0.8-gguf-metadata-inspection");
+        assert_eq!(info.stage, "alpha-1.4-llama-native-foundation");
     }
 
     #[test]
@@ -113,8 +135,8 @@ mod tests {
         let diagnostics = runtime_diagnostics_json();
         assert!(diagnostics.contains("\"bridge_connected\":true"));
         assert!(diagnostics.contains("\"inference_available\":false"));
-        assert!(diagnostics.contains("\"runtime_engine\":\"not_attached\""));
-        assert!(diagnostics.contains("alpha-0.8-gguf-metadata-inspection"));
+        assert!(diagnostics.contains("\"model_loaded\":false"));
+        assert!(diagnostics.contains("alpha-1.4-llama-native-foundation"));
     }
 
     #[test]

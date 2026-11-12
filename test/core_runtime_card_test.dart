@@ -10,13 +10,16 @@ class _FakeRuntimeService implements CoreRuntimeService {
   @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
-        coreVersion: '0.8.0',
-        stage: 'alpha-0.8-gguf-metadata-inspection',
+        coreVersion: '0.9.0',
+        stage: 'alpha-1.4-llama-native-foundation',
         bridgeConnected: true,
-        runtimeEngine: 'not_attached',
+        runtimeEngine: 'llama.cpp-native-unavailable',
         inferenceAvailable: false,
         modelRegistry: 'flutter_sqlite',
         agentRegistry: 'rust_in_memory',
+        nativeEngineAvailable: false,
+        nativeEngineVersion: null,
+        nativeEngineMessage: 'المحرك الأصلي غير متاح في بيئة الاختبار.',
       );
 }
 
@@ -33,7 +36,7 @@ void main() {
 
     expect(find.text('نواة Rust متصلة'), findsOneWidget);
     expect(
-      find.text('الاتصال ناجح، لكن لا يوجد محرك استدلال موصول أو نموذج نشط.'),
+      find.text('المحرك الأصلي غير متاح في بيئة الاختبار.'),
       findsOneWidget,
     );
   });

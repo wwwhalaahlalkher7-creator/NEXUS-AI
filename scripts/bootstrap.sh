@@ -18,8 +18,8 @@ if [[ ! -d android ]]; then
   flutter create --platforms=android --project-name nexus_app .
 fi
 
-echo "Fetching Flutter dependencies..."
-flutter pub get
+echo "Integrating Flutter Rust Bridge and resolving dependencies..."
+bash scripts/integrate_bridge.sh
 
 echo "Checking Rust formatting..."
 cargo fmt --all -- --check

@@ -38,7 +38,7 @@ class DashboardPage extends StatelessWidget {
         const _FeatureTile(
           icon: Icons.memory_outlined,
           title: 'محرك النماذج',
-          description: 'واجهة الربط مع Rust مضافة؛ محرك llama.cpp لم يُدمج بعد.',
+          description: 'بدأ دمج مكتبة llama.cpp الأصلية على Android ARM64؛ تحميل النماذج وتوليد النصوص في المرحلة التالية.',
         ),
         const _FeatureTile(
           icon: Icons.hub_outlined,
@@ -85,7 +85,7 @@ class _StatusCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'تكامل نواة Rust — Alpha 0.8',
+                  'تكامل llama.cpp الأصلي — Alpha 1.4',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -93,7 +93,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'يعرض التطبيق حالة اتصال نواة Rust مباشرة. تم توسيع فحص ملفات GGUF؛ لا يوجد نموذج ذكاء اصطناعي نشط حالياً، ومحرك الاستدلال لم يُدمج بعد.',
+                  'يعرض التطبيق حالة مكتبة llama.cpp بعد تضمينها وتهيئتها عبر Rust. لم يتم تحميل نموذج GGUF أو تنفيذ الاستدلال بعد.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),

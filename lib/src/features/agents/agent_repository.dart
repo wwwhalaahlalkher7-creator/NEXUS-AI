@@ -3,12 +3,22 @@ import 'package:sqflite/sqflite.dart';
 import '../../data/local_database.dart';
 import 'agent_record.dart';
 
-class AgentRepository {
+abstract interface class AgentStore {
+  Future<void> create(AgentRecord agent);
+  Future<List<AgentRecord>> list();
+  Future<AgentRecord?> getById(String id);
+  Future<void> updateStatus(String id, AgentRecordStatus status);
+  Future<void> updateModel(String id, String? modelId);
+  Future<void> delete(String id);
+}
+
+class AgentRepository implements AgentStore {
   AgentRepository({LocalDatabase? database})
       : _localDatabase = database ?? LocalDatabase.instance;
 
   final LocalDatabase _localDatabase;
 
+  @override
   Future<void> create(AgentRecord agent) async {
     final db = await _localDatabase.database;
     await db.insert(
@@ -18,6 +28,7 @@ class AgentRepository {
     );
   }
 
+  @override
   Future<List<AgentRecord>> list() async {
     final db = await _localDatabase.database;
     final rows = await db.query(
@@ -27,6 +38,7 @@ class AgentRepository {
     return rows.map(AgentRecord.fromMap).toList(growable: false);
   }
 
+  @override
   Future<AgentRecord?> getById(String id) async {
     final db = await _localDatabase.database;
     final rows = await db.query(
@@ -39,6 +51,7 @@ class AgentRepository {
     return AgentRecord.fromMap(rows.single);
   }
 
+  @override
   Future<void> updateStatus(String id, AgentRecordStatus status) async {
     final db = await _localDatabase.database;
     final changed = await db.update(
@@ -52,6 +65,21 @@ class AgentRepository {
     }
   }
 
+  @override
+  Future<void> updateModel(String id, String? modelId) async {
+    final db = await _localDatabase.database;
+    final changed = await db.update(
+      'agents',
+      {'model_id': modelId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (changed == 0) {
+      throw StateError('Agent does not exist: $id');
+    }
+  }
+
+  @override
   Future<void> delete(String id) async {
     final db = await _localDatabase.database;
     await db.delete('agents', where: 'id = ?', whereArgs: [id]);

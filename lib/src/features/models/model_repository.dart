@@ -104,6 +104,17 @@ class ModelRepository implements ModelStore {
   @override
   Future<void> delete(String id) async {
     final db = await _localDatabase.database;
-    await db.delete('models', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((transaction) async {
+      // Agent.model_id is intentionally a soft reference so older databases
+      // can be upgraded without rebuilding the agents table. Clear it before
+      // deleting the catalog row to avoid dangling assignments.
+      await transaction.update(
+        'agents',
+        {'model_id': null},
+        where: 'model_id = ?',
+        whereArgs: [id],
+      );
+      await transaction.delete('models', where: 'id = ?', whereArgs: [id]);
+    });
   }
 }

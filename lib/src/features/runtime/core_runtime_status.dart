@@ -8,6 +8,9 @@ class CoreRuntimeStatus {
     required this.inferenceAvailable,
     required this.modelRegistry,
     required this.agentRegistry,
+    required this.nativeEngineAvailable,
+    this.nativeEngineVersion,
+    this.nativeEngineMessage,
     this.message,
   });
 
@@ -19,6 +22,9 @@ class CoreRuntimeStatus {
   final bool inferenceAvailable;
   final String modelRegistry;
   final String agentRegistry;
+  final bool nativeEngineAvailable;
+  final String? nativeEngineVersion;
+  final String? nativeEngineMessage;
   final String? message;
 
   factory CoreRuntimeStatus.fromJson(Map<String, dynamic> json) {
@@ -31,6 +37,9 @@ class CoreRuntimeStatus {
       inferenceAvailable: json['inference_available'] as bool,
       modelRegistry: json['model_registry'] as String,
       agentRegistry: json['agent_registry'] as String,
+      nativeEngineAvailable: json['native_engine_available'] as bool? ?? false,
+      nativeEngineVersion: json['native_engine_version'] as String?,
+      nativeEngineMessage: json['native_engine_message'] as String?,
     );
   }
 
@@ -43,6 +52,9 @@ class CoreRuntimeStatus {
         inferenceAvailable: false,
         modelRegistry: 'unknown',
         agentRegistry: 'unknown',
+        nativeEngineAvailable: false,
+        nativeEngineVersion: null,
+        nativeEngineMessage: null,
         message: message,
       );
 }

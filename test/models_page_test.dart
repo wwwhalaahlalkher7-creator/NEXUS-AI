@@ -4,6 +4,7 @@ import 'package:nexus_app/src/features/models/model_record.dart';
 import 'package:nexus_app/src/features/models/model_repository.dart';
 import 'package:nexus_app/src/features/models/models_page.dart';
 import 'package:nexus_app/src/features/models/model_import_service.dart';
+import 'package:nexus_app/src/features/models/model_file_verifier.dart';
 import 'package:nexus_app/src/features/models/rust_gguf_inspector.dart';
 
 class _FakeModelImportService implements ModelImportService {
@@ -27,6 +28,16 @@ class _FakeModelImportService implements ModelImportService {
       ),
     );
   }
+}
+
+
+class _FakeModelFileVerifier implements ModelFileVerifier {
+  const _FakeModelFileVerifier(this.result);
+
+  final ModelFileVerification result;
+
+  @override
+  Future<ModelFileVerification> verify(ModelRecord model) async => result;
 }
 
 class _FakeModelStore implements ModelStore {
@@ -171,6 +182,43 @@ void main() {
     expect(find.textContaining('السياق: 4.1K'), findsOneWidget);
     expect(find.textContaining('ملف GGUF موجود، غير محمّل'), findsOneWidget);
     expect(find.textContaining('4.0 KB'), findsOneWidget);
+  });
+
+
+  testWidgets('runs a local model file verification and reports its limits', (tester) async {
+    final store = _FakeModelStore();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await store.register(ModelRecord(
+      id: 'model-verified',
+      displayName: 'Verified model',
+      runtime: ModelRuntime.llamaCpp,
+      status: ModelInstallStatus.installed,
+      localPath: '/app/models/verified.gguf',
+      sizeBytes: 4096,
+      createdAtUnixMs: now,
+      updatedAtUnixMs: now,
+    ));
+
+    await tester.pumpWidget(MaterialApp(
+      home: ModelsPage(
+        store: store,
+        fileVerifier: const _FakeModelFileVerifier(
+          ModelFileVerification(
+            isValid: true,
+            actualSizeBytes: 4096,
+            message: 'الملف اجتاز الفحص المحدود؛ لم يتم اختبار تشغيل النموذج.',
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('فحص سلامة الملف'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('الملف اجتاز الفحص المحدود؛ لم يتم اختبار تشغيل النموذج.'),
+      findsOneWidget,
+    );
   });
 
 }

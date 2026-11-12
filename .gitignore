@@ -1,0 +1,12 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Generated FRB integration backend (created by integrate_bridge.sh / CI)
+rust_builder/
+
+# Rust build outputs
+target/

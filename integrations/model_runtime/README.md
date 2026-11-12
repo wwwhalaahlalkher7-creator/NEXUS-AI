@@ -1,14 +1,17 @@
 # Model runtime adapter
 
-## Current status — Alpha 0.8
-The Flutter application now reaches the Rust core through Flutter Rust Bridge and reads a runtime diagnostics snapshot. The bridge reports that inference is unavailable because no native inference backend is attached.
+## Alpha 1.4 — native backend initialization
 
-## Planned llama.cpp adapter contract
-- Discover whether the native backend is available on this ABI.
-- Validate a model file and its metadata before loading.
-- Load/unload with explicit memory and context limits.
-- Report lifecycle state only after backend confirmation.
-- Stream generated tokens and support cancellation.
-- Surface structured errors without exposing filesystem paths unnecessarily.
+The Android ARM64 build now checks out a pinned official llama.cpp source revision, compiles its shared libraries with CMake/NDK, packages them into the APK, and includes a small C ABI adapter. Rust dynamically loads that adapter, calls `llama_backend_init()` once, and reads `llama_version()`. The shared-library handle remains alive for the application process.
 
-GGUF files can be imported and their bounded metadata directory inspected in Alpha 0.8. No model is loaded or executed.
+The Flutter runtime diagnostics report native adapter availability and version. Host tests intentionally report that the Android native adapter is unavailable.
+
+## Not implemented yet
+
+- GGUF model loading and freeing
+- `llama_context` creation and memory planning
+- Tokenization, prompt evaluation, sampling, and decoding
+- Streaming tokens and cancellation
+- Multiple model sessions or GPU acceleration
+
+A successful adapter initialization is not a loaded model and does not make inference available.

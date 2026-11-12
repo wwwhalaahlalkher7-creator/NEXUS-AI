@@ -1,14 +1,21 @@
+// The remaining `if` forms in this file are collection elements, not statements.
+// ignore_for_file: curly_braces_in_flow_control_structures
+
 import 'package:flutter/material.dart';
 
 import 'model_record.dart';
 import 'model_repository.dart';
 import 'model_import_service.dart';
+import 'model_file_verifier.dart';
+import '../runtime/model_runtime_manager.dart';
 
 class ModelsPage extends StatefulWidget {
-  const ModelsPage({super.key, this.store, this.importService});
+  const ModelsPage({super.key, this.store, this.importService, this.fileVerifier, this.runtimeManager});
 
   final ModelStore? store;
   final ModelImportService? importService;
+  final ModelFileVerifier? fileVerifier;
+  final ModelRuntimeManager? runtimeManager;
 
   @override
   State<ModelsPage> createState() => _ModelsPageState();
@@ -17,14 +24,21 @@ class ModelsPage extends StatefulWidget {
 class _ModelsPageState extends State<ModelsPage> {
   late final ModelStore _store;
   late final ModelImportService _importService;
+  late final ModelFileVerifier _fileVerifier;
+  late final ModelRuntimeManager _runtimeManager;
+  ModelSessionSnapshot? _runtimeSnapshot;
   late Future<List<ModelRecord>> _modelsFuture;
   final Set<String> _importingModelIds = {};
+  final Set<String> _verifyingModelIds = {};
 
   @override
   void initState() {
     super.initState();
     _store = widget.store ?? ModelRepository();
     _importService = widget.importService ?? LocalGgufModelImportService();
+    _fileVerifier = widget.fileVerifier ?? LocalModelFileVerifier();
+    _runtimeManager = widget.runtimeManager ??
+        ModelRuntimeManager(verifier: _fileVerifier);
     _modelsFuture = _store.list();
   }
 
@@ -66,6 +80,13 @@ class _ModelsPageState extends State<ModelsPage> {
     if (_importingModelIds.contains(model.id)) {
       return;
     }
+    if (_runtimeManager.snapshot.isLoaded &&
+        _runtimeManager.snapshot.modelId == model.id) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أفرغ النموذج قبل استبدال ملفه.')),
+      );
+      return;
+    }
     setState(() => _importingModelIds.add(model.id));
     try {
       final imported = await _importService.importGguf(model);
@@ -86,6 +107,10 @@ class _ModelsPageState extends State<ModelsPage> {
         fileType: imported.inspection.fileType,
         parameterCount: imported.inspection.parameterCount,
       );
+      _runtimeManager.resetPreparation();
+      if (_runtimeSnapshot?.modelId == model.id) {
+        _runtimeSnapshot = null;
+      }
       if (!mounted) {
         return;
       }
@@ -109,7 +134,88 @@ class _ModelsPageState extends State<ModelsPage> {
     }
   }
 
+  Future<void> _verifyModel(ModelRecord model) async {
+    if (_verifyingModelIds.contains(model.id)) {
+      return;
+    }
+    setState(() => _verifyingModelIds.add(model.id));
+    try {
+      final result = await _fileVerifier.verify(model);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تعذر فحص الملف: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _verifyingModelIds.remove(model.id));
+      }
+    }
+  }
+
+  Future<void> _prepareRuntime(ModelRecord model) async {
+    try {
+      final result = await _runtimeManager.prepare(model);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _runtimeSnapshot = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تقييم جاهزية التشغيل: $error')),
+      );
+    }
+  }
+
+  Future<void> _loadPreparedModel(ModelRecord model) async {
+    final result = await _runtimeManager.loadPrepared(model);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _runtimeSnapshot = result);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(result.message)),
+    );
+  }
+
+  Future<void> _unloadRuntime() async {
+    final result = await _runtimeManager.unload();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _runtimeSnapshot = result);
+  }
+
   Future<void> _deleteModel(ModelRecord model) async {
+    if (_runtimeManager.snapshot.isLoaded &&
+        _runtimeManager.snapshot.modelId == model.id) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أفرغ النموذج قبل حذف سجله.')),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -132,6 +238,10 @@ class _ModelsPageState extends State<ModelsPage> {
     }
 
     try {
+      if (_runtimeSnapshot?.modelId == model.id) {
+        _runtimeManager.resetPreparation();
+        _runtimeSnapshot = null;
+      }
       await _store.delete(model.id);
       if (!mounted) {
         return;
@@ -257,6 +367,66 @@ class _ModelsPageState extends State<ModelsPage> {
                                 ),
                               ),
                             ),
+                          if (model.status == ModelInstallStatus.installed &&
+                              model.runtime == ModelRuntime.llamaCpp)
+                            Padding(
+                              padding: const EdgeInsetsDirectional.only(start: 8),
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: () => _prepareRuntime(model),
+                                    icon: const Icon(Icons.play_circle_outline),
+                                    label: const Text('تقييم جاهزية التشغيل'),
+                                  ),
+                                  if (_runtimeManager.engineAvailable &&
+                                      _runtimeSnapshot?.state == ModelSessionState.readyToLoad &&
+                                      _runtimeSnapshot?.modelId == model.id)
+                                    FilledButton.tonalIcon(
+                                      onPressed: () => _loadPreparedModel(model),
+                                      icon: const Icon(Icons.play_arrow),
+                                      label: const Text('تحميل النموذج'),
+                                    ),
+                                  if (_runtimeSnapshot?.state == ModelSessionState.loaded &&
+                                      _runtimeSnapshot?.modelId == model.id)
+                                    TextButton.icon(
+                                      onPressed: _unloadRuntime,
+                                      icon: const Icon(Icons.stop_circle_outlined),
+                                      label: const Text('تفريغ النموذج'),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          if (_runtimeSnapshot?.modelId == model.id)
+                            Padding(
+                              padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 8),
+                              child: Text(
+                                _runtimeSnapshot!.message,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                          if (model.status == ModelInstallStatus.installed)
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: TextButton.icon(
+                                onPressed: _verifyingModelIds.contains(model.id)
+                                    ? null
+                                    : () => _verifyModel(model),
+                                icon: _verifyingModelIds.contains(model.id)
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.fact_check_outlined),
+                                label: Text(
+                                  _verifyingModelIds.contains(model.id)
+                                      ? 'جارٍ فحص الملف…'
+                                      : 'فحص سلامة الملف',
+                                ),
+                              ),
+                            ),
                           if (model.status == ModelInstallStatus.installed && model.sizeBytes != null)
                             Padding(
                               padding: const EdgeInsetsDirectional.only(start: 12, end: 8, bottom: 8),
@@ -322,9 +492,15 @@ class _ModelsPageState extends State<ModelsPage> {
   }
 
   String _formatCount(int value) {
-    if (value >= 1000000000) return '${(value / 1000000000).toStringAsFixed(1)}B';
-    if (value >= 1000000) return '${(value / 1000000).toStringAsFixed(1)}M';
-    if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}K';
+    if (value >= 1000000000) {
+      return '${(value / 1000000000).toStringAsFixed(1)}B';
+    }
+    if (value >= 1000000) {
+      return '${(value / 1000000).toStringAsFixed(1)}M';
+    }
+    if (value >= 1000) {
+      return '${(value / 1000).toStringAsFixed(1)}K';
+    }
     return '$value';
   }
 

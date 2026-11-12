@@ -9,7 +9,9 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.8.0"
+version = "1.4.0"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Unsafe code is denied by default. The narrowly scoped Android loader module
+# opts in locally and documents each ABI call.
+unsafe_code = "deny"

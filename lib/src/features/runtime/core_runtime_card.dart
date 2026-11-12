@@ -89,6 +89,12 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                 _InfoLine(label: 'المرحلة', value: status.stage),
                 _InfoLine(label: 'سجل النماذج', value: 'SQLite محلي في Flutter'),
                 _InfoLine(label: 'سجل الوكلاء', value: 'ذاكرة Rust مؤقتة'),
+                _InfoLine(
+                  label: 'محرك llama.cpp',
+                  value: status.nativeEngineAvailable
+                      ? 'متصل ${status.nativeEngineVersion ?? ''}'
+                      : 'غير متاح',
+                ),
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
@@ -100,7 +106,10 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                   child: Text(
                     status.inferenceAvailable
                         ? 'الاستدلال متاح عبر محرك موصول.'
-                        : 'الاتصال ناجح، لكن لا يوجد محرك استدلال موصول أو نموذج نشط.',
+                        : status.nativeEngineAvailable
+                            ? 'مكتبة llama.cpp موجودة وتمت تهيئة النواة الأصلية. لم يتم تحميل نموذج GGUF أو تفعيل توليد النصوص بعد.'
+                            : status.nativeEngineMessage ??
+                                'الاتصال ناجح، لكن مكتبة llama.cpp الأصلية غير متاحة في هذه الحزمة.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),

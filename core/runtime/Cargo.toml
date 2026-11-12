@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 nexus-shared = { path = "../shared" }
+libloading = "=0.8.9"
 
 [lints]
 workspace = true
