@@ -1,7 +1,14 @@
-# NEXUS AI — Alpha 1.9.1: Multi-turn context CI formatting fix
+# NEXUS AI — Alpha 1.9.2: Rust bridge visibility fix
 
 NEXUS is a local-first personal AI platform. Alpha 1.9 connects the durable SQLite conversation history to the active GGUF model as role-aware messages. Flutter selects completed turns, Rust validates and marshals the messages, and the native llama.cpp adapter applies the GGUF chat template and counts the resulting tokens. When the formatted prompt plus requested output does not fit, the adapter removes oldest complete turns while preserving system messages and the current user message.
 
+
+## Alpha 1.9.2 Rust bridge visibility correction
+
+The stream callback state exposes `finish` to its parent module with
+`pub(super)`. This is the narrowest visibility needed by `generate_text`;
+the callback state and its implementation remain encapsulated inside the
+private `stream_callback` module.
 
 ## Alpha 1.9.1 CI formatting correction
 
@@ -62,7 +69,7 @@ GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles th
 
 The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-Flutter package version: `1.9.1+27`; Rust workspace version: `1.9.1`.
+Flutter package version: `1.9.2+28`; Rust workspace version: `1.9.2`.
 
 See `docs/development/ALPHA_1_9_MULTI_TURN_CONTEXT.md`,
 `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`,

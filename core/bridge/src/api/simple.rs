@@ -230,7 +230,7 @@ mod stream_callback {
             }
         }
 
-        fn finish(&mut self, result: NativeGenerationOperation) {
+        pub(super) fn finish(&mut self, result: NativeGenerationOperation) {
             if !self.pending_utf8.is_empty() {
                 let delta = String::from_utf8_lossy(&self.pending_utf8).into_owned();
                 self.pending_utf8.clear();
