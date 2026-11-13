@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4.2: Rust native module conflict fix
+# NEXUS AI — Alpha 1.4.3: FRB module deduplication fix
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -75,3 +75,18 @@ llama.cpp Android CMake build tree using a toolchain-aware cache key, uses the
 runner CPU allocation for native compilation, and retries APK builds only for
 recognized transient network failures. Tests and APK/native-library verification
 remain required. See `docs/development/WORKFLOW_SPEEDUP_ALPHA_1_4_2.md`.
+
+
+## Alpha 1.4.3 FRB module declaration and lint correction
+
+The FRB post-generation helper now recognizes its injected `mod frb_generated;`
+declaration even when FRB appends an explanatory block comment. It keeps one
+declaration, removes stale duplicates, and applies the narrow
+`#[allow(unsafe_code)]` attribute to that declaration. The operation is
+idempotent and preserves crate-level documentation. The `libloading` dependency
+is now Android-target-only because its only use is inside the Android loader;
+host Rust checks no longer report it as unused.
+
+A fixture reproducing the injected-comment plus duplicate-declaration case was
+run through the helper twice and passed structural assertions. Full Rust and
+Android builds remain to be confirmed by GitHub Actions.
