@@ -458,11 +458,45 @@ jobs:
       - name: Format Dart sources
         run: dart format lib test
 
-      - name: Run Flutter static analysis
-        run: flutter analyze --no-pub
+      - name: Run Flutter analysis and tests in parallel (both required)
+        shell: bash
+        run: |
+          set -uo pipefail
+          analyze_log="$RUNNER_TEMP/nexus-flutter-analyze.log"
+          test_log="$RUNNER_TEMP/nexus-flutter-test.log"
 
-      - name: Run Flutter tests
-        run: flutter test --no-pub
+          echo "Starting Flutter static analysis and tests concurrently."
+          flutter analyze --no-pub >"$analyze_log" 2>&1 &
+          analyze_pid=$!
+          flutter test --no-pub >"$test_log" 2>&1 &
+          test_pid=$!
+
+          analyze_status=0
+          test_status=0
+          if wait "$analyze_pid"; then
+            echo "Flutter analysis: PASS"
+          else
+            analyze_status=$?
+            echo "::error::Flutter analysis failed (exit $analyze_status)."
+          fi
+
+          if wait "$test_pid"; then
+            echo "Flutter tests: PASS"
+          else
+            test_status=$?
+            echo "::error::Flutter tests failed (exit $test_status)."
+          fi
+
+          echo "===== flutter analyze output ====="
+          cat "$analyze_log"
+          echo "===== flutter test output ====="
+          cat "$test_log"
+
+          if [ "$analyze_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
+            echo "::error::Flutter verification failed: analyze=$analyze_status, test=$test_status. APK build is blocked."
+            exit 1
+          fi
+          echo "Both required Flutter gates passed."
 
       - name: Cache Gradle dependencies
         uses: gradle/actions/setup-gradle@v4

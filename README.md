@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4.5: Agent dialog lifecycle and RadioGroup correction
+# NEXUS AI — Alpha 1.4.6: Parallel Flutter verification gates
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -122,4 +122,11 @@ model-file checks use the same clear verification wording asserted by the
 widget tests. Flutter static analysis is now a required CI step rather than an
 advisory step.
 
-Flutter package version: `1.4.5+19`; Rust workspace version: `1.4.5`.
+Flutter package version: `1.4.6+20`; Rust workspace version: `1.4.6`.
+
+
+## Alpha 1.4.6 parallel Flutter verification
+
+The CI workflow runs `flutter analyze --no-pub` and `flutter test --no-pub` concurrently in the same required verification step. Each command writes to its own log and its exit status is captured independently. The step waits for both commands, prints both logs, and fails if either command exits non-zero. The Android APK build is downstream and therefore cannot start unless both checks pass. Neither check uses `continue-on-error`, `|| true`, or a warning-only mode.
+
+This reduces sequential wait time while preserving both checks as hard CI gates. Both processes are allowed to finish so their complete diagnostics are available; any failure blocks all subsequent steps.
