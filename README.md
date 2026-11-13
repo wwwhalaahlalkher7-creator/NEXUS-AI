@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4: llama.cpp native foundation
+# NEXUS AI — Alpha 1.4.1: FRB Cargokit dependency fix
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -37,3 +37,14 @@ The Android native adapter includes code from the official `ggml-org/llama.cpp` 
 Run `scripts/integrate_bridge.sh` before `flutter pub get`. The integration step
 generates the Cargokit `rust_builder/` package used to compile and bundle the
 Rust bridge; CI performs this integration automatically.
+
+
+## Alpha 1.4.1 CI correction
+
+The Cargokit integration package generated under `rust_builder/` is named
+`rust_lib_nexus_app`. The root Flutter manifest must use that exact package key
+for its path dependency; the directory name is not the Dart package name. The
+CI workflow and `scripts/integrate_bridge.sh` now verify both names before
+resolving dependencies. This fixes the FRB integration failure where Pub
+reported that `rust_lib_nexus_app` did not match the previously declared
+`rust_builder` dependency name.

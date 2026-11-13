@@ -1,4 +1,4 @@
-# Alpha 1.4 — llama.cpp native foundation
+# Alpha 1.4.1 — FRB Cargokit dependency correction
 
 ## Goal
 
@@ -32,3 +32,12 @@ Begin actual native integration by compiling a pinned llama.cpp revision for And
 ## Known validation boundary
 
 The source archive itself is not locally compiled in this environment. CI output plus a physical Android device smoke test are required before marking the integration validated.
+
+
+## Alpha 1.4.1 correction
+
+Cargokit generates `rust_builder/pubspec.yaml` with package name
+`rust_lib_nexus_app`. The root `pubspec.yaml` now declares the path dependency
+using that package name, while retaining `path: rust_builder`. CI and the local
+integration script assert the generated package name and dependency mapping.
+No llama.cpp runtime behavior changed in this patch.

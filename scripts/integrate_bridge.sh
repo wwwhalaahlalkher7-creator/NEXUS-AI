@@ -41,7 +41,8 @@ rm -rf core/bridge/src/api
 cp -a "$backup_dir/api" core/bridge/src/api
 
 test -s rust_builder/pubspec.yaml
-grep -A1 -F '  rust_builder:' pubspec.yaml | grep -F 'path: rust_builder'
+grep -Fx 'name: rust_lib_nexus_app' rust_builder/pubspec.yaml
+grep -A1 -F '  rust_lib_nexus_app:' pubspec.yaml | grep -F 'path: rust_builder'
 
 flutter pub get
 flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml

@@ -284,7 +284,8 @@ jobs:
           # The generated Cargokit package must remain resolvable after the
           # NEXUS dependency manifest is restored.
           test -s rust_builder/pubspec.yaml
-          grep -A1 -F '  rust_builder:' pubspec.yaml | grep -F 'path: rust_builder'
+          grep -Fx 'name: rust_lib_nexus_app' rust_builder/pubspec.yaml
+          grep -A1 -F '  rust_lib_nexus_app:' pubspec.yaml | grep -F 'path: rust_builder'
 
       - name: Verify generated Flutter Rust Bridge bindings
         shell: bash
