@@ -119,6 +119,7 @@ void main() {
       findsOneWidget,
     );
     expect(store.records.single.status, AgentRecordStatus.ready);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('agent can be paused and resumed through status actions',
@@ -246,4 +247,22 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('cancelling agent creation closes the form cleanly',
+      (tester) async {
+    final store = _MemoryAgentStore();
+    await tester.pumpWidget(
+      MaterialApp(home: AgentsPage(repository: store)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('إنشاء وكيل'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('إلغاء'));
+    await tester.pumpAndSettle();
+
+    expect(store.records, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
 }

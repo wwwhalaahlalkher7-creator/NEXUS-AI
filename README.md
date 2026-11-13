@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4.4: FRB module deduplication fix
+# NEXUS AI — Alpha 1.4.5: Agent dialog lifecycle and RadioGroup correction
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -106,3 +106,20 @@ The FRB cleanup also removes stale attributes attached to deleted duplicate
 module declarations.
 
 See `docs/development/ALPHA_1_4_4_MATERIAL_UI_RUNTIME_TEST_FIX.md`.
+
+
+## Alpha 1.4.5 agent dialog and radio API correction
+
+The agent-creation dialog now owns its text controllers in a dedicated stateful
+route widget and disposes them only when that route is actually removed. This
+avoids disposing a controller while the dialog reverse transition still has a
+mounted text field. The form uses a scrollable alert dialog to remain usable on
+short displays and with the software keyboard open.
+
+The local-model selector now uses the `RadioGroup` ancestor API instead of the
+deprecated `RadioListTile.groupValue` and `onChanged` properties. Failed local
+model-file checks use the same clear verification wording asserted by the
+widget tests. Flutter static analysis is now a required CI step rather than an
+advisory step.
+
+Flutter package version: `1.4.5+19`; Rust workspace version: `1.4.5`.

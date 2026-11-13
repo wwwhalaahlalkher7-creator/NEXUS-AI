@@ -46,87 +46,38 @@ class _AgentsPageState extends State<AgentsPage> {
   }
 
   Future<void> _createAgent() async {
-    final nameController = TextEditingController();
-    final descriptionController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    final result = await showDialog<bool>(
+    // The dialog owns its controllers. showDialog completes when the route is
+    // popped, before its reverse transition necessarily finishes, so disposing
+    // controllers here can race the still-mounted TextFormField subtree.
+    final draft = await showDialog<_AgentDraft>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('إنشاء وكيل'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: nameController,
-                autofocus: true,
-                maxLength: 48,
-                decoration: const InputDecoration(labelText: 'اسم الوكيل'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'أدخل اسماً للوكيل';
-                  }
-                  if (value.trim().length > 48) {
-                    return 'الاسم أطول من الحد المسموح';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: descriptionController,
-                maxLength: 240,
-                decoration: const InputDecoration(labelText: 'الوصف (اختياري)'),
-                minLines: 1,
-                maxLines: 3,
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.pop(dialogContext, true);
-              }
-            },
-            child: const Text('إنشاء'),
-          ),
-        ],
-      ),
+      builder: (_) => const _CreateAgentDialog(),
     );
+    if (draft == null || !mounted) {
+      return;
+    }
 
-    if (result == true && mounted) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final id = 'agent-${DateTime.now().microsecondsSinceEpoch}';
-      try {
-        await _repository.create(
-          AgentRecord(
-            id: id,
-            name: nameController.text.trim(),
-            description: descriptionController.text.trim(),
-            status: AgentRecordStatus.draft,
-            createdAtUnixMs: now,
-          ),
-        );
-        if (mounted) {
-          _refresh();
-          _showMessage('تم حفظ الوكيل كمسودة محلية.');
-        }
-      } catch (error) {
-        if (mounted) {
-          _showMessage('تعذر إنشاء الوكيل: $error');
-        }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final id = 'agent-${DateTime.now().microsecondsSinceEpoch}';
+    try {
+      await _repository.create(
+        AgentRecord(
+          id: id,
+          name: draft.name,
+          description: draft.description,
+          status: AgentRecordStatus.draft,
+          createdAtUnixMs: now,
+        ),
+      );
+      if (mounted) {
+        _refresh();
+        _showMessage('تم حفظ الوكيل كمسودة محلية.');
+      }
+    } catch (error) {
+      if (mounted) {
+        _showMessage('تعذر إنشاء الوكيل: $error');
       }
     }
-    nameController.dispose();
-    descriptionController.dispose();
   }
 
   Future<void> _changeStatus(
@@ -187,19 +138,24 @@ class _AgentsPageState extends State<AgentsPage> {
                 width: double.maxFinite,
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 320),
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      for (final model in available)
-                        RadioListTile<String>(
-                          value: model.id,
-                          groupValue: agent.modelId,
-                          title: Text(model.displayName),
-                          subtitle: Text(_modelDetails(model)),
-                          onChanged: (value) =>
-                              Navigator.pop(dialogContext, value),
-                        ),
-                    ],
+                  child: RadioGroup<String>(
+                    groupValue: agent.modelId,
+                    onChanged: (value) {
+                      if (value != null) {
+                        Navigator.pop(dialogContext, value);
+                      }
+                    },
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final model in available)
+                          RadioListTile<String>(
+                            value: model.id,
+                            title: Text(model.displayName),
+                            subtitle: Text(_modelDetails(model)),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -226,7 +182,7 @@ class _AgentsPageState extends State<AgentsPage> {
         if (!verification.isValid) {
           if (mounted) {
             _showMessage(
-              'لم يتم الربط؛ فشل فحص ملف النموذج: ${verification.message}',
+              'لم يتم الربط؛ فشل التحقق من ملف النموذج: ${verification.message}',
             );
           }
           return;
@@ -503,6 +459,95 @@ class _AgentsPageState extends State<AgentsPage> {
       AgentRecordStatus.ready => 'تحديد كجاهز',
       AgentRecordStatus.paused => 'إيقاف مؤقت',
     };
+  }
+}
+
+class _AgentDraft {
+  const _AgentDraft({required this.name, required this.description});
+
+  final String name;
+  final String description;
+}
+
+class _CreateAgentDialog extends StatefulWidget {
+  const _CreateAgentDialog();
+
+  @override
+  State<_CreateAgentDialog> createState() => _CreateAgentDialogState();
+}
+
+class _CreateAgentDialogState extends State<_CreateAgentDialog> {
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+    Navigator.of(context).pop(
+      _AgentDraft(
+        name: _nameController.text.trim(),
+        description: _descriptionController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: const Text('إنشاء وكيل'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextFormField(
+              controller: _nameController,
+              maxLength: 48,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: 'اسم الوكيل'),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'أدخل اسماً للوكيل';
+                }
+                if (value.trim().length > 48) {
+                  return 'الاسم أطول من الحد المسموح';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _descriptionController,
+              maxLength: 240,
+              decoration: const InputDecoration(labelText: 'الوصف (اختياري)'),
+              minLines: 1,
+              maxLines: 3,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('إنشاء'),
+        ),
+      ],
+    );
   }
 }
 

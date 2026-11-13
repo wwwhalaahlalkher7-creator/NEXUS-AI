@@ -458,8 +458,7 @@ jobs:
       - name: Format Dart sources
         run: dart format lib test
 
-      - name: Advisory Flutter analysis (non-blocking)
-        continue-on-error: true
+      - name: Run Flutter static analysis
         run: flutter analyze --no-pub
 
       - name: Run Flutter tests
