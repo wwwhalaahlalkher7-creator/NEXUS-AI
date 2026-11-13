@@ -6,7 +6,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'nexus_local.db';
-  static const _databaseVersion = 3;
+  static const _databaseVersion = 4;
 
   Database? _database;
 
@@ -26,6 +26,7 @@ class LocalDatabase {
         await _createAgentsTable(db);
         await _createV2Tables(db);
         await _upgradeV3Models(db);
+        await _upgradeV4MessageStatus(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -33,6 +34,9 @@ class LocalDatabase {
         }
         if (oldVersion < 3) {
           await _upgradeV3Models(db);
+        }
+        if (oldVersion < 4) {
+          await _upgradeV4MessageStatus(db);
         }
       },
     );
@@ -121,4 +125,33 @@ Future<void> _upgradeV3Models(DatabaseExecutor db) async {
   await db.execute('ALTER TABLE models ADD COLUMN embedding_length INTEGER');
   await db.execute('ALTER TABLE models ADD COLUMN file_type INTEGER');
   await db.execute('ALTER TABLE models ADD COLUMN parameter_count INTEGER');
+}
+
+/// Rebuilds the messages table to add an explicit cancelled terminal state.
+/// Existing messages and their conversation foreign-key relation are preserved.
+Future<void> _upgradeV4MessageStatus(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE messages_v4 (
+      id TEXT PRIMARY KEY NOT NULL,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system', 'tool')),
+      content TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('complete', 'streaming', 'cancelled', 'failed')),
+      created_at_unix_ms INTEGER NOT NULL,
+      FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )
+  ''');
+  await db.execute('''
+    INSERT INTO messages_v4 (
+      id, conversation_id, role, content, status, created_at_unix_ms
+    )
+    SELECT id, conversation_id, role, content, status, created_at_unix_ms
+    FROM messages
+  ''');
+  await db.execute('DROP TABLE messages');
+  await db.execute('ALTER TABLE messages_v4 RENAME TO messages');
+  await db.execute(
+    'CREATE INDEX idx_messages_conversation_created '
+    'ON messages(conversation_id, created_at_unix_ms ASC)',
+  );
 }

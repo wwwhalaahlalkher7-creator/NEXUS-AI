@@ -88,6 +88,15 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                 _InfoLine(label: 'الإصدار', value: status.coreVersion),
                 _InfoLine(label: 'المرحلة', value: status.stage),
                 _InfoLine(label: 'سجل النماذج', value: 'SQLite محلي في Flutter'),
+                _InfoLine(
+                  label: 'حالة النموذج',
+                  value: status.modelLoaded ? 'محمل فعلياً' : 'غير محمل',
+                ),
+                if (status.modelLoaded && status.modelContextTokens != null)
+                  _InfoLine(
+                    label: 'سياق التشغيل',
+                    value: '${status.modelContextTokens} رمز على CPU',
+                  ),
                 _InfoLine(label: 'سجل الوكلاء', value: 'ذاكرة Rust مؤقتة'),
                 _InfoLine(
                   label: 'محرك llama.cpp',
@@ -106,9 +115,11 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                   child: Text(
                     status.inferenceAvailable
                         ? 'الاستدلال متاح عبر محرك موصول.'
-                        : status.nativeEngineAvailable
-                            ? 'مكتبة llama.cpp موجودة وتمت تهيئة النواة الأصلية. لم يتم تحميل نموذج GGUF أو تفعيل توليد النصوص بعد.'
-                            : status.nativeEngineMessage ??
+                        : status.modelLoaded
+                            ? 'تم تحميل أوزان GGUF. افتح المحادثة لتجربة التوليد المحلي؛ لا يتأكد نجاح الاستدلال إلا بعد اكتمال أول استجابة.'
+                            : status.nativeEngineAvailable
+                                ? 'مكتبة llama.cpp موجودة وتمت تهيئة النواة الأصلية. لم يتم تحميل نموذج GGUF بعد.'
+                                : status.nativeEngineMessage ??
                                 'الاتصال ناجح، لكن مكتبة llama.cpp الأصلية غير متاحة في هذه الحزمة.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),

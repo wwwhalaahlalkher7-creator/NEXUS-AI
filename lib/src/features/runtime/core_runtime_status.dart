@@ -6,11 +6,13 @@ class CoreRuntimeStatus {
     required this.bridgeConnected,
     required this.runtimeEngine,
     required this.inferenceAvailable,
+    required this.modelLoaded,
     required this.modelRegistry,
     required this.agentRegistry,
     required this.nativeEngineAvailable,
     this.nativeEngineVersion,
     this.nativeEngineMessage,
+    this.modelContextTokens,
     this.message,
   });
 
@@ -20,28 +22,14 @@ class CoreRuntimeStatus {
   final bool bridgeConnected;
   final String runtimeEngine;
   final bool inferenceAvailable;
+  final bool modelLoaded;
   final String modelRegistry;
   final String agentRegistry;
   final bool nativeEngineAvailable;
   final String? nativeEngineVersion;
   final String? nativeEngineMessage;
+  final int? modelContextTokens;
   final String? message;
-
-  factory CoreRuntimeStatus.fromJson(Map<String, dynamic> json) {
-    return CoreRuntimeStatus(
-      coreName: json['core_name'] as String,
-      coreVersion: json['core_version'] as String,
-      stage: json['stage'] as String,
-      bridgeConnected: json['bridge_connected'] as bool,
-      runtimeEngine: json['runtime_engine'] as String,
-      inferenceAvailable: json['inference_available'] as bool,
-      modelRegistry: json['model_registry'] as String,
-      agentRegistry: json['agent_registry'] as String,
-      nativeEngineAvailable: json['native_engine_available'] as bool? ?? false,
-      nativeEngineVersion: json['native_engine_version'] as String?,
-      nativeEngineMessage: json['native_engine_message'] as String?,
-    );
-  }
 
   factory CoreRuntimeStatus.unavailable(String message) => CoreRuntimeStatus(
         coreName: 'NEXUS AI',
@@ -50,11 +38,13 @@ class CoreRuntimeStatus {
         bridgeConnected: false,
         runtimeEngine: 'unknown',
         inferenceAvailable: false,
+        modelLoaded: false,
         modelRegistry: 'unknown',
         agentRegistry: 'unknown',
         nativeEngineAvailable: false,
         nativeEngineVersion: null,
         nativeEngineMessage: null,
+        modelContextTokens: null,
         message: message,
       );
 }

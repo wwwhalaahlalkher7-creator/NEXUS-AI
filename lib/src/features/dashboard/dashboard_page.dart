@@ -3,11 +3,13 @@ import 'package:material_ui/material_ui.dart';
 import '../runtime/core_runtime_card.dart';
 import '../runtime/core_runtime_service.dart';
 import '../runtime/rust_core_runtime_service.dart';
+import '../runtime/model_runtime_manager.dart';
 
 class DashboardPage extends StatelessWidget {
-  const DashboardPage({super.key, this.runtimeService});
+  const DashboardPage({super.key, this.runtimeService, this.runtimeManager});
 
   final CoreRuntimeService? runtimeService;
+  final ModelRuntimeManager? runtimeManager;
 
   @override
   Widget build(BuildContext context) {
@@ -32,13 +34,17 @@ class DashboardPage extends StatelessWidget {
         const _StatusCard(),
         const SizedBox(height: 12),
         CoreRuntimeCard(service: runtimeService ?? RustCoreRuntimeService()),
+        if (runtimeManager != null) ...[
+          const SizedBox(height: 10),
+          _ModelSessionSummary(manager: runtimeManager!),
+        ],
         const SizedBox(height: 16),
         Text('مكونات المنصة', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         const _FeatureTile(
           icon: Icons.memory_outlined,
           title: 'محرك النماذج',
-          description: 'بدأ دمج مكتبة llama.cpp الأصلية على Android ARM64؛ تحميل النماذج وتوليد النصوص في المرحلة التالية.',
+          description: 'تحميل GGUF ومعالجة Prompt وأخذ عينات وتوليد تدريجي مع إمكانية الإيقاف على Android ARM64.',
         ),
         const _FeatureTile(
           icon: Icons.hub_outlined,
@@ -85,7 +91,7 @@ class _StatusCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'تكامل llama.cpp الأصلي — Alpha 1.4',
+                  'محرك llama.cpp الأصلي — Alpha 1.7',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -93,7 +99,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'يعرض التطبيق حالة مكتبة llama.cpp بعد تضمينها وتهيئتها عبر Rust. لم يتم تحميل نموذج GGUF أو تنفيذ الاستدلال بعد.',
+                  'أضيف مسار توليد النص المحلي: Tokenization وPrompt Evaluation وSampling وتدفق الاستجابة والإيقاف. يلزم اختبار أول نموذج فعلياً على Android.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),
@@ -109,7 +115,7 @@ class _StatusCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'لا يوجد نموذج ذكاء اصطناعي نشط',
+                        'تحميل GGUF متاح · التوليد المحلي قيد التحقق على الجهاز',
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
                               color: scheme.onPrimaryContainer,
                               fontWeight: FontWeight.w700,
@@ -154,6 +160,67 @@ class _FeatureTile extends StatelessWidget {
           child: Text(description),
         ),
       ),
+    );
+  }
+}
+
+class _ModelSessionSummary extends StatelessWidget {
+  const _ModelSessionSummary({required this.manager});
+
+  final ModelRuntimeManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        final snapshot = manager.snapshot;
+        final (icon, title, detail) = switch (snapshot.state) {
+          ModelSessionState.loaded => (
+              Icons.check_circle_outline,
+              'نموذج محمّل فعلياً على CPU',
+              'السياق: ${snapshot.contextTokens ?? 0} رمز · افتح المحادثة لتجربة التوليد المحلي.',
+            ),
+          ModelSessionState.loading => (
+              Icons.downloading_outlined,
+              'جارٍ تحميل النموذج',
+              snapshot.message,
+            ),
+          ModelSessionState.unloading => (
+              Icons.hourglass_bottom,
+              'جارٍ تفريغ النموذج',
+              snapshot.message,
+            ),
+          ModelSessionState.readyToLoad => (
+              Icons.fact_check_outlined,
+              'النموذج اجتاز فحص الجاهزية',
+              'الأوزان لم تُحمّل بعد.',
+            ),
+          ModelSessionState.checking => (
+              Icons.manage_search_outlined,
+              'جارٍ فحص النموذج',
+              snapshot.message,
+            ),
+          ModelSessionState.failed => (
+              Icons.error_outline,
+              'تعذر تجهيز النموذج',
+              snapshot.message,
+            ),
+          ModelSessionState.idle => (
+              Icons.memory_outlined,
+              'لا يوجد نموذج محمّل',
+              'أضف نموذج GGUF وافحص جاهزيته من مكتبة النماذج.',
+            ),
+        };
+        return Card(
+          child: ListTile(
+            leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
+            title: Text(title),
+            subtitle: Text(detail),
+            isThreeLine: detail.length > 56,
+          ),
+        );
+      },
     );
   }
 }

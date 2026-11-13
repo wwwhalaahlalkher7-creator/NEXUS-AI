@@ -3,7 +3,11 @@ import 'package:material_ui/material_ui.dart';
 import 'features/dashboard/dashboard_page.dart';
 import 'features/agents/agents_page.dart';
 import 'features/models/models_page.dart';
+import 'features/inference/inference_page.dart';
+import 'features/models/model_file_verifier.dart';
 import 'features/runtime/core_runtime_service.dart';
+import 'features/runtime/model_runtime_manager.dart';
+import 'features/runtime/rust_model_runtime_backend.dart';
 
 class NexusHomePage extends StatefulWidget {
   const NexusHomePage({super.key, this.runtimeService});
@@ -16,26 +20,39 @@ class NexusHomePage extends StatefulWidget {
 
 class _NexusHomePageState extends State<NexusHomePage> {
   int _selectedIndex = 0;
+  late final ModelFileVerifier _modelFileVerifier;
+  late final ModelRuntimeManager _modelRuntimeManager;
   late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    // Keep the manager above tab pages: switching tabs disposes the visible
+    // page, but the process-level native llama.cpp session remains alive.
+    _modelFileVerifier = LocalModelFileVerifier();
+    _modelRuntimeManager = ModelRuntimeManager(
+      verifier: _modelFileVerifier,
+      backend: const RustModelRuntimeBackend(),
+    );
     _pages = [
-      DashboardPage(runtimeService: widget.runtimeService),
-      const ModelsPage(),
+      DashboardPage(
+        runtimeService: widget.runtimeService,
+        runtimeManager: _modelRuntimeManager,
+      ),
+      ModelsPage(
+        fileVerifier: _modelFileVerifier,
+        runtimeManager: _modelRuntimeManager,
+      ),
       const AgentsPage(),
-      const _PlaceholderPage(
-        title: 'الأجهزة',
-        subtitle: 'اكتشاف الأجهزة والاقتران لم يُفعّلا بعد.',
-        icon: Icons.devices_outlined,
-      ),
-      const _PlaceholderPage(
-        title: 'الإعدادات',
-        subtitle: 'إعدادات المنصة ستُبنى تدريجياً.',
-        icon: Icons.settings_outlined,
-      ),
+      InferencePage(runtimeManager: _modelRuntimeManager),
+      const _SettingsPage(),
     ];
+  }
+
+  @override
+  void dispose() {
+    _modelRuntimeManager.dispose();
+    super.dispose();
   }
 
   @override
@@ -71,8 +88,9 @@ class _NexusHomePageState extends State<NexusHomePage> {
             label: 'الوكلاء',
           ),
           NavigationDestination(
-            icon: Icon(Icons.devices_outlined),
-            label: 'الأجهزة',
+            icon: Icon(Icons.chat_bubble_outline_rounded),
+            selectedIcon: Icon(Icons.chat_bubble_rounded),
+            label: 'المحادثة',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
@@ -84,38 +102,41 @@ class _NexusHomePageState extends State<NexusHomePage> {
   }
 }
 
-class _PlaceholderPage extends StatelessWidget {
-  const _PlaceholderPage({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
+class _SettingsPage extends StatelessWidget {
+  const _SettingsPage();
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 52, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 16),
-            Text(title, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            Text(subtitle, textAlign: TextAlign.center),
-            const SizedBox(height: 18),
-            const Chip(
-              avatar: Icon(Icons.construction_outlined, size: 18),
-              label: Text('قيد التطوير'),
-            ),
-          ],
+    final colors = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text('الإعدادات', style: Theme.of(context).textTheme.headlineSmall),
+        const SizedBox(height: 8),
+        Text(
+          'إعدادات NEXUS AI وإدارة موارد الجهاز ستُفعّل تدريجياً.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
         ),
-      ),
+        const SizedBox(height: 16),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('الأجهزة'),
+            subtitle: const Text('اكتشاف الأجهزة والاقتران لم يُفعّلا بعد.'),
+            trailing: const Icon(Icons.lock_outline_rounded),
+          ),
+        ),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.tune_rounded),
+            title: const Text('تفضيلات المنصة'),
+            subtitle: const Text('إعدادات المظهر والموارد قيد التطوير.'),
+            trailing: const Icon(Icons.construction_outlined),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,7 +1,6 @@
 //! NEXUS runtime foundation.
-//! Runtime diagnostics are exposed through the Flutter bridge. The Android
-//! llama.cpp shared adapter can be initialized, but model loading and inference
-//! remain unavailable until the next integration stage.
+//! The Android llama.cpp adapter can load one GGUF model, create one CPU
+//! context, and stream bounded text generation through the pinned native ABI.
 
 pub mod gguf;
 pub mod native;
@@ -17,19 +16,61 @@ pub struct CoreInfo {
     pub stage: &'static str,
 }
 
-
-/// Reports whether the Android llama.cpp shared adapter can be loaded and
-/// whether its native backend initialization succeeded. This does not mean
-/// that a GGUF model is loaded or text inference is available.
+/// Reports native availability and the actual model/context state.
 pub fn native_engine_status() -> native::engine::NativeEngineStatus {
     native::engine::native_engine_status()
+}
+
+/// Loads one local GGUF model and creates a bounded CPU context.
+pub fn load_native_model(
+    path: &str,
+    context_tokens: u32,
+    threads: u32,
+) -> native::engine::NativeModelOperation {
+    native::engine::load_native_model(path, context_tokens, threads)
+}
+
+/// Releases the context before releasing the model weights.
+pub fn unload_native_model() -> native::engine::NativeModelOperation {
+    native::engine::unload_native_model()
+}
+
+/// Streams generated token pieces to the bridge callback. The native adapter
+/// serializes model access while keeping cancellation independent of that lock.
+// The callback and user-data pair stays explicit across the internal Rust boundary.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_native_text(
+    prompt: &str,
+    max_tokens: u32,
+    temperature: f32,
+    top_k: u32,
+    top_p: f32,
+    seed: u32,
+    callback: native::engine::NativeTokenCallback,
+    user_data: *mut std::ffi::c_void,
+) -> native::engine::NativeGenerationOperation {
+    native::engine::generate_native_text(
+        prompt,
+        max_tokens,
+        temperature,
+        top_k,
+        top_p,
+        seed,
+        callback,
+        user_data,
+    )
+}
+
+/// Requests cancellation without waiting for the native generation session lock.
+pub fn cancel_native_generation() -> bool {
+    native::engine::cancel_native_generation()
 }
 
 pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-1.4-llama-native-foundation",
+        stage: "alpha-1.7-real-text-generation",
     }
 }
 
@@ -75,7 +116,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-1.4-llama-native-foundation");
+        assert_eq!(get_core_info().stage, "alpha-1.7-real-text-generation");
     }
 
     #[test]

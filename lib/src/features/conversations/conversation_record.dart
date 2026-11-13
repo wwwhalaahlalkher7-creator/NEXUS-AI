@@ -1,6 +1,6 @@
 enum MessageRole { user, assistant, system, tool }
 
-enum MessageStatus { complete, streaming, failed }
+enum MessageStatus { complete, streaming, cancelled, failed }
 
 class ConversationRecord {
   const ConversationRecord({

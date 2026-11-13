@@ -1,31 +1,62 @@
-# NEXUS AI — Alpha 1.4.6: Parallel Flutter verification gates
+# NEXUS AI — Alpha 1.8.0: Local conversation history
 
-NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
+NEXUS is a local-first personal AI platform. Alpha 1.8 adds persistent local conversations and message recovery on top of Alpha 1.7's Android ARM64 GGUF text-generation path. Conversation records and messages are stored in SQLite on-device. Prompt composition remains single-turn in this milestone: prior messages are displayed and retained, but are not yet fed back into the model context.
 
-## What is integrated
+## Alpha 1.7 generation path
+
+- Tokenize a bounded UTF-8 prompt and apply the model's embedded default chat template when available.
+- Evaluate the prompt in bounded CPU batches and reject requests that exceed the active context window.
+- Generate with a configurable Top-K / Top-P / temperature sampler chain.
+- Stream decoded token pieces through the Rust bridge, assembling split UTF-8 sequences safely.
+- Signal generation start before prompt evaluation so the Stop action is available during long prompt processing.
+- Cancel through an atomic flag and llama.cpp CPU abort callback without acquiring the model/session mutex.
+- Clear the context KV memory after every request. Conversation history is not retained.
+- Report inference as verified only after a complete non-cancelled response; unload resets that verification for the current model.
+
+The current UI exposes a **المحادثة** page with local conversation history, message recovery, an output cap selector, streamed responses, and a Stop action. Prompts remain independent single-turn inference requests until the multi-turn context milestone. The first target remains Android `arm64-v8a` CPU inference.
+
+## Alpha 1.7 boundaries
+
+- Prompt limit: 16 KiB UTF-8; formatted prompt: 64 KiB.
+- Output limit: 1–1024 tokens in native code; the UI offers 64, 128, 256, and 512.
+- Context size: 512–4096 tokens; CPU threads: 1–8.
+- Decoder-only text models are supported; encoder/decoder and diffusion models are rejected. Embedded templates must be supported by the pinned llama.cpp helper or an explicit template error is returned.
+- Single-file GGUF only. Split GGUF shards, conversation history, tool calling, vision/audio input, GPU offload, and distributed inference are not part of this milestone.
+- The host C ABI contract test uses a fake llama API. Only CI's pinned Android NDK build and a physical-device smoke test can verify the actual engine integration.
+
+
+## Native model-loading foundation (Alpha 1.6)
 
 - Pin and check out the official `ggml-org/llama.cpp` source at commit `cd959bae99ff4bed22bef2604f45241c09bbb8c8` (release v0.9.0).
 - Cross-compile the upstream llama.cpp/GGML code as position-independent static libraries for Android `arm64-v8a`, then link them into one NEXUS-owned shared adapter.
 - Package `libnexus_llama_probe.so` and `libc++_shared.so` into the APK through `android/app/src/main/jniLibs/arm64-v8a`; the upstream engine code is statically linked inside the adapter.
 - Load the isolated C ABI adapter from Rust using a runtime library handle. The handle is retained for the process lifetime.
 - Call `llama_backend_init()` once and read `llama_version()` through the adapter.
-- Show native adapter availability and the engine version in the runtime diagnostics card.
+- Load one GGUF model through `llama_model_load_from_file()` and create one bounded CPU context with `llama_init_from_model()`.
+- Release the inference context before freeing its owning model; a second model cannot replace the active session implicitly.
+- Check the actual Android `MemAvailable` estimate before model allocation, cap the context to 512–4096 tokens, and limit CPU threads to 1–8.
+- Expose typed load/unload operations and actual session diagnostics through Flutter Rust Bridge.
+- Show whether a model is actually loaded and its context size in the model library, dashboard session summary, and native runtime diagnostics.
 - Keep unsafe Rust denied by default at workspace level; the small Android dynamic-loader module has a local, documented lint allowance.
 
-## Explicit limitations
+## Historical Alpha 1.6 limitations (updated by Alpha 1.7 where noted)
 
-- This milestone initializes the llama.cpp backend only. It does **not** load any GGUF model, create an inference context, tokenize prompts, generate text, or stream tokens.
-- `inference_available` and `model_loaded` remain `false` by design.
+- Alpha 1.6 alone loaded GGUF weights and allocated a CPU context without generating text. Alpha 1.7 adds the first bounded single-turn generation path described above.
+- A model is not inference-verified merely because it loaded. `inference_available` becomes true only after a complete non-cancelled response for the active model.
 - The initial native build targets Android `arm64-v8a` only and sets the minimum Android API to 28 (Android 9). Other ABIs and desktop platforms are not packaged yet.
+- The current importer accepts single-file GGUF models only; multi-file GGUF shard sets are rejected until the library can preserve and validate every shard together.
 - A successful CI package check proves that the native shared libraries are present in the APK; it does not replace a physical-device smoke test.
 
 ## Build and verification
 
 GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles the pinned llama.cpp source with CMake for Android API 28, statically links upstream llama.cpp/GGML into the NEXUS adapter, copies the adapter and C++ runtime into Android `jniLibs`, generates Flutter Rust Bridge bindings, runs Rust and Flutter checks, builds the ARM64 debug APK, and verifies the adapter exports and native dependency closure.
 
-The CI build is the authoritative compile check. The CMake adapter wrapper was sanity-built locally against a minimal fake llama API, but the pinned upstream source has not been cross-compiled here because the Android NDK, Flutter, Dart, and Rust/Cargo toolchains are not available. GitHub Actions remains the authoritative Android build check.
+The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-See `docs/development/ALPHA_1_4_SCOPE.md` and `docs/architecture/LLAMA_CPP_ANDROID.md`.
+See `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`,
+`docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`,
+`docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`, and
+`docs/architecture/LLAMA_CPP_ANDROID.md`.
 
 ## Third-party notices
 
@@ -122,7 +153,7 @@ model-file checks use the same clear verification wording asserted by the
 widget tests. Flutter static analysis is now a required CI step rather than an
 advisory step.
 
-Flutter package version: `1.4.6+20`; Rust workspace version: `1.4.6`.
+Flutter package version: `1.8.0+25`; Rust workspace version: `1.8.0`.
 
 
 ## Alpha 1.4.6 parallel Flutter verification
@@ -130,3 +161,107 @@ Flutter package version: `1.4.6+20`; Rust workspace version: `1.4.6`.
 The CI workflow runs `flutter analyze --no-pub` and `flutter test --no-pub` concurrently in the same required verification step. Each command writes to its own log and its exit status is captured independently. The step waits for both commands, prints both logs, and fails if either command exits non-zero. The Android APK build is downstream and therefore cannot start unless both checks pass. Neither check uses `continue-on-error`, `|| true`, or a warning-only mode.
 
 This reduces sequential wait time while preserving both checks as hard CI gates. Both processes are allowed to finish so their complete diagnostics are available; any failure blocks all subsequent steps.
+
+
+## Alpha 1.4.7 CI maintenance and Release milestone
+
+The CI runner is pinned to `ubuntu-24.04` to prevent an untested automatic
+Ubuntu image migration during active development. GitHub Actions dependencies
+were updated to maintained releases using the Node.js 24 runtime where
+applicable. The Java distribution remains Temurin 17, and the Android NDK,
+ABI, API level, Rust toolchain channel, and Flutter stable channel were not
+changed by this maintenance update.
+
+Formatting checks are now non-mutating: Rust uses
+`cargo fmt --all -- --check`, and Dart uses
+`dart format --output=none --set-exit-if-changed lib test`. The workflow fails
+when checked-in or generated source files need formatting instead of silently
+rewriting files inside the runner.
+
+### Build mode policy
+
+During active development, CI continues to create and upload an ARM64 **Debug**
+APK for quick installation and smoke testing. This is intentional and is not
+the final distribution build. Once feature development is complete and the
+release candidate passes the final device tests, the release milestone must:
+
+1. Configure Android release signing with a dedicated upload keystore stored
+   only as protected GitHub Secrets (never commit the keystore or passwords).
+2. Build with `flutter build apk --release --no-pub --target-platform android-arm64`.
+3. Verify the Release APK contains the NEXUS llama.cpp adapter and C++ runtime.
+4. Verify APK signature and package metadata, then upload a clearly named
+   `nexus-android-arm64-release.apk` artifact.
+5. Keep Debug builds for development diagnostics; use the signed Release APK
+   as the final installable distribution artifact. The project target remains
+   APK, not AAB.
+
+Do not switch the current CI job to Release before development and final
+verification are complete. The signing/release workflow is a deliberate final
+stage, not part of this alpha CI-maintenance change.
+
+
+## Alpha 1.5.0 — Typed Flutter ↔ Rust runtime bridge
+
+The Flutter runtime service now calls the Rust bridge health endpoint and then
+receives a strongly typed `RuntimeDiagnosticsDto` through
+`flutter_rust_bridge`. Runtime state is no longer serialized as a manually
+assembled JSON string and parsed back into Dart. The DTO carries the core
+identity, bridge reachability, native adapter availability/version/message,
+registry identifiers, and explicit `inference_available` / `model_loaded`
+flags.
+
+The UI maps the typed response into `CoreRuntimeStatus`. A failed bridge health
+check or initialization still produces an unavailable state; the service never
+turns a bridge connection into a claim that inference or a model is active.
+The existing GGUF header inspection remains a separate typed Rust bridge call.
+
+Alpha 1.5 strengthened the Flutter/Rust boundary only. At that milestone it
+did not load a GGUF model, create an inference context, or generate text.
+Alpha 1.6 extends the typed bridge with the native loading lifecycle described
+below, subject to CI and physical-device validation.
+
+
+## Alpha 1.6.0 — Real GGUF model loading and CPU session lifecycle
+
+The native adapter now loads real GGUF weights with the pinned llama.cpp C API,
+creates one CPU context, reports the actual context size, and frees the context
+before freeing the model. The process owns only one active session; loading a
+different model requires an explicit unload first. The adapter rejects invalid
+paths, empty files, unsupported context/thread values, and a conservative
+preflight memory estimate that cannot be established or satisfied.
+
+Flutter calls the typed `load_gguf_model` and `unload_gguf_model` bridge APIs.
+The model library and dashboard share one app-scoped session manager, report
+loading/unloading states, and prevent deleting or replacing the active model
+file. Runtime diagnostics show the loaded context. The importer rejects split
+GGUF shards until it can preserve the complete shard set atomically.
+At the Alpha 1.6 milestone, a successful load was not represented as
+text-generation availability. Alpha 1.7 adds the first generation path, while
+runtime verification still remains false until a complete non-cancelled response
+has actually been produced.
+
+The CI workflow verifies the NEXUS native C ABI exports and generated FRB
+load/unload/generate/cancel APIs. A host-side adapter contract test uses a fake
+llama API for deterministic lifecycle tests; only the NDK build against the
+pinned upstream source can establish ABI compatibility with that exact engine.
+The Alpha 1.8 SQLite migration contract is also executed on the host.
+
+See `docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`.
+
+
+## Alpha 1.7.0 — Real local text generation
+
+Alpha 1.7 adds the first actual inference path on top of the Alpha 1.6 model lifecycle. It uses the pinned llama.cpp C API for prompt tokenization, optional embedded chat-template formatting, bounded prompt evaluation, Top-K / Top-P / temperature sampling, token-to-piece decoding, and incremental output over Flutter Rust Bridge. The native C ABI start event unlocks cancellation before the first generated token, and cancellation does not wait for the model mutex.
+
+Inference verification is scoped to the active model session and is reset when that session is unloaded. A loaded model is not considered inference-verified until one complete non-cancelled response produces at least one token. Each request clears its KV cache; no prior turns are retained. This remains an Alpha single-turn text interface, not yet a full conversational agent runtime.
+
+See `docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`.
+
+
+## Alpha 1.8.0 — Local conversation history
+
+Alpha 1.8 connects the existing SQLite conversation tables to the inference screen. The first user message creates a titled conversation; user messages and assistant drafts are persisted, streaming output is checkpointed, and terminal messages are marked complete, cancelled, or failed. The history sheet restores recent conversations and supports confirmed deletion, while interrupted streaming rows are recovered as failed messages the next time the chat page is opened. SQLite schema version 4 preserves existing rows while adding the explicit `cancelled` status.
+
+This is persistence and UI continuity, not multi-turn inference: Alpha 1.8 still sends each prompt to the model independently. Multi-turn prompt assembly and context-window budgeting remain a separate milestone.
+
+The host-side `scripts/test_conversation_migration.py` executes the migration SQL against SQLite and checks data preservation, status validation, and cascading deletion. See `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`.

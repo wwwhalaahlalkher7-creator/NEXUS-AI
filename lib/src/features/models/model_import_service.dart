@@ -23,6 +23,13 @@ abstract interface class ModelImportService {
   Future<ImportedModelFile?> importGguf(ModelRecord model);
 }
 
+/// NEXUS Alpha 1.6 supports single-file GGUF imports only. llama.cpp can load
+/// split GGUF sets, but the current importer intentionally copies one file.
+bool isSingleFileGgufPath(String path) => !RegExp(
+      r'-\d{5}-of-\d{5}\.gguf$',
+      caseSensitive: false,
+    ).hasMatch(p.basename(path));
+
 class LocalGgufModelImportService implements ModelImportService {
   LocalGgufModelImportService({RustGgufInspector? inspector})
       : _inspector = inspector ?? RustGgufInspector();
@@ -42,6 +49,13 @@ class LocalGgufModelImportService implements ModelImportService {
     final sourcePath = selected.files.single.path;
     if (sourcePath == null || sourcePath.isEmpty) {
       throw StateError('تعذر الحصول على مسار الملف من منتقي الملفات.');
+    }
+
+    if (!isSingleFileGgufPath(sourcePath)) {
+      throw UnsupportedError(
+        'النماذج المقسّمة إلى عدة ملفات GGUF غير مدعومة حالياً. '
+        'استورد نموذجاً بملف GGUF واحد.',
+      );
     }
 
     final sourceInspection = await _inspector.inspect(sourcePath);

@@ -41,9 +41,39 @@ A debug APK is for installation/testing only, not a signed Play Store release.
 - `flutter test --no-pub`
 - `flutter build apk --debug --target-platform android-arm64`
 
-Bridge acceptance still requires verifying both exported Rust functions from Flutter
-on a physical Android device; a successful code-generation step alone is insufficient.
+Bridge acceptance still requires verifying model loading, streamed generation, and cancellation from Flutter on a physical Android device; successful code generation alone is insufficient.
 
-## llama.cpp native adapter (Alpha 1.4)
+## llama.cpp native adapter (Alpha 1.4 → Alpha 1.7)
 
-The Rust runtime now dynamically loads the Android ARM64 `libnexus_llama_probe.so` adapter. That adapter links the pinned upstream llama.cpp shared library and exposes backend initialization/version functions only. The library is packaged by the Android CI build through `jniLibs`. This is intentionally separate from Flutter Rust Bridge's generated API: FRB invokes safe Rust diagnostics, and Rust encapsulates the dynamic C ABI boundary. Model loading and inference are not available in Alpha 1.4. See `LLAMA_CPP_ANDROID.md`.
+The Rust runtime dynamically loads the Android ARM64 `libnexus_llama_probe.so`
+adapter, which statically links the pinned upstream llama.cpp/GGML implementation.
+The adapter is packaged by Android CI through `jniLibs`. This is separate from
+Flutter Rust Bridge: FRB invokes safe Rust diagnostics and lifecycle functions,
+and Rust encapsulates the dynamic C ABI boundary.
+
+Alpha 1.4 initialized the backend only. Alpha 1.6 adds actual GGUF weight loading,
+one CPU context, a conservative memory preflight, one-active-session enforcement,
+and explicit unload. Alpha 1.7 adds prompt tokenization/evaluation, bounded sampling,
+streamed text output, and cancellation. The C ABI frees the context before the
+owning model and prevents unload from racing with generation.
+
+## Typed diagnostics and lifecycle API
+
+Runtime diagnostics cross the bridge as `RuntimeDiagnosticsDto`, not a JSON
+string. Flutter calls `health_check()` and then maps `runtime_diagnostics()`
+into its UI-facing status. The typed `load_gguf_model(path, context_tokens,
+threads)` and `unload_gguf_model()` calls expose the native session lifecycle.
+`model_loaded` and the actual context size are reported only after native
+confirmation. The `generate_text()` API returns a `Stream<InferenceEventDto>`
+with a start marker, text deltas, and one terminal event. `cancel_text_generation()`
+sets an atomic cancellation request without waiting on the model/session lock.
+The bridge callback catches panics, handles split UTF-8 token pieces, and never
+allows a Rust panic to cross the C ABI boundary. `inference_available` becomes
+true only after a successful non-cancelled response for the active session and
+resets when the model is unloaded. Each generation clears KV memory, so history
+and multi-turn context are not yet supported.
+
+
+## Alpha 1.7 generation API
+
+`generate_text(sink, prompt, max_tokens, temperature, top_k, top_p, seed)` is a synchronous Rust operation on an FRB worker while its output is streamed through `StreamSink`. The native entrypoint validates model architecture, prompt bounds, sampling ranges, and context capacity before evaluation. Its first callback is a zero-length start signal; later callbacks contain byte pieces and token counts; its terminal result includes success, cancellation, or an error. Dart's Stop control is enabled only after the start marker.

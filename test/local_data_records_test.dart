@@ -37,6 +37,22 @@ void main() {
       expect(restored.status, MessageStatus.complete);
       expect(restored.content, 'رد محفوظ');
     });
+
+    test('message preserves the explicit cancelled state', () {
+      const record = MessageRecord(
+        id: 'message-2',
+        conversationId: 'conversation-1',
+        role: MessageRole.assistant,
+        content: 'نص جزئي',
+        status: MessageStatus.cancelled,
+        createdAtUnixMs: 400,
+      );
+
+      final restored = MessageRecord.fromMap(record.toMap());
+
+      expect(restored.status, MessageStatus.cancelled);
+      expect(restored.content, 'نص جزئي');
+    });
   });
 
   test('model record preserves runtime and installation metadata', () {

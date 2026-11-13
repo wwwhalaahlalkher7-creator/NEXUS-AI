@@ -16,24 +16,24 @@ concurrency:
 jobs:
   verify-and-build:
     name: Verify Rust + Flutter and build Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout NEXUS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Restore pinned llama.cpp source
         id: llama-source-cache
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: third_party/llama.cpp
           key: nexus-llama-source-v1-${{ runner.os }}-${{ runner.arch }}-cd959bae99ff4bed22bef2604f45241c09bbb8c8
 
       - name: Checkout pinned llama.cpp source
         if: steps.llama-source-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ggml-org/llama.cpp
           ref: cd959bae99ff4bed22bef2604f45241c09bbb8c8
@@ -52,19 +52,19 @@ jobs:
       - name: Save pinned llama.cpp source
         if: steps.llama-source-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: third_party/llama.cpp
           key: nexus-llama-source-v1-${{ runner.os }}-${{ runner.arch }}-cd959bae99ff4bed22bef2604f45241c09bbb8c8
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@v2.23.0
         with:
           channel: stable
           cache: true
@@ -78,7 +78,7 @@ jobs:
       # have a separate versioned cache below to avoid mixing cache ownership.
       - name: Cache Rust dependencies
         continue-on-error: true
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           cache-bin: false
           cache-on-failure: true
@@ -94,7 +94,7 @@ jobs:
       - name: Restore FRB tool binaries
         id: frb-tools-cache
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/bin/flutter_rust_bridge_codegen
@@ -102,7 +102,7 @@ jobs:
           key: nexus-frb-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.fingerprint }}-frb-2.13.0-expand-1.0.127
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
 
@@ -145,7 +145,7 @@ jobs:
       - name: Restore llama.cpp Android CMake cache
         id: llama-cmake-cache
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             build/llama-android
@@ -162,6 +162,13 @@ jobs:
           rustc --version
           cargo --version
           java -version
+
+      - name: Test native adapter and local conversation data contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test_llama_adapter_contract.py
+          python3 scripts/test_conversation_migration.py
 
       - name: Ensure cached Flutter Rust Bridge build tools
         shell: bash
@@ -183,7 +190,7 @@ jobs:
       - name: Save FRB tool binaries
         if: steps.frb-tools-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/.cargo/bin/flutter_rust_bridge_codegen
@@ -272,7 +279,24 @@ jobs:
           ls -lh "$jni_dir"
           readelf -h "$jni_dir/libnexus_llama_probe.so" | grep -F 'AArch64'
           readelf -h "$jni_dir/libc++_shared.so" | grep -F 'AArch64'
-          readelf -Ws "$jni_dir/libnexus_llama_probe.so" | grep -E 'nexus_llama_backend_init|nexus_llama_version'
+          native_symbols="$(readelf -Ws "$jni_dir/libnexus_llama_probe.so")"
+          for symbol in \
+            nexus_llama_backend_init \
+            nexus_llama_version \
+            nexus_llama_load_model \
+            nexus_llama_inference_available \
+            nexus_llama_cancel_generation \
+            nexus_llama_generate \
+            nexus_llama_unload_model \
+            nexus_llama_is_model_loaded \
+            nexus_llama_loaded_context_tokens \
+            nexus_llama_last_error; do
+            if [[ "$native_symbols" != *"$symbol"* ]]; then
+              echo "::error::Android adapter is missing required C ABI symbol: $symbol"
+              exit 1
+            fi
+            echo "Verified native export: $symbol"
+          done
 
           # Verify every non-platform dependency of the adapter is present in
           # the APK's JNI directory. System dependencies must exist in the NDK.
@@ -309,7 +333,7 @@ jobs:
       - name: Save llama.cpp Android CMake cache
         if: steps.llama-cmake-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             build/llama-android
@@ -427,12 +451,61 @@ jobs:
             echo "::error::FRB did not generate lib/src/rust/frb_generated.dart."
             exit 1
           }
+          grep -Fq 'healthCheck' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing healthCheck()."
+            exit 1
+          }
+          grep -Fq 'runtimeDiagnostics' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing runtimeDiagnostics()."
+            exit 1
+          }
+          grep -Fq 'RuntimeDiagnosticsDto' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing RuntimeDiagnosticsDto."
+            exit 1
+          }
+          grep -Fq 'loadGgufModel' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing loadGgufModel()."
+            exit 1
+          }
+          grep -Fq 'unloadGgufModel' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing unloadGgufModel()."
+            exit 1
+          }
+          grep -Fq 'ModelRuntimeOperationDto' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing ModelRuntimeOperationDto."
+            exit 1
+          }
+          grep -Fq 'modelContextTokens' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing modelContextTokens."
+            exit 1
+          }
+          grep -Fq 'generateText' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing generateText()."
+            exit 1
+          }
+          grep -Fq 'cancelTextGeneration' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing cancelTextGeneration()."
+            exit 1
+          }
+          grep -Fq 'InferenceEventDto' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing InferenceEventDto."
+            exit 1
+          }
+          grep -Fq 'started' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing the inference start marker."
+            exit 1
+          }
+          grep -Fq 'inferenceAvailable' lib/src/rust/api/simple.dart || {
+            echo "::error::Generated Flutter API is missing inferenceAvailable."
+            exit 1
+          }
           test -s core/bridge/src/frb_generated.rs
           grep -B1 -F 'mod frb_generated;' core/bridge/src/lib.rs | grep -F '#[allow(unsafe_code)]'
 
-      - name: Format and validate Rust workspace including generated FFI
+      - name: Check Rust formatting and validate workspace including generated FFI
+        shell: bash
         run: |
-          cargo fmt --all
+          set -euo pipefail
           cargo fmt --all -- --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
@@ -455,8 +528,9 @@ jobs:
       - name: Resolve Flutter dependencies
         run: flutter pub get
 
-      - name: Format Dart sources
-        run: dart format lib test
+      - name: Check Dart formatting without modifying sources
+        shell: bash
+        run: dart format --output=none --set-exit-if-changed lib test
 
       - name: Run Flutter analysis and tests in parallel (both required)
         shell: bash
@@ -499,8 +573,10 @@ jobs:
           echo "Both required Flutter gates passed."
 
       - name: Cache Gradle dependencies
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6.4.1
 
+      # Development CI intentionally produces a Debug APK for quick device tests.
+      # Switch to the signed Release APK workflow only after feature development is complete.
       - name: Build debug ARM64 APK (retry network failures only)
         shell: bash
         run: |
@@ -547,7 +623,7 @@ jobs:
           unzip -l "$apk" | grep -F 'lib/arm64-v8a/libc++_shared.so'
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nexus-android-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk

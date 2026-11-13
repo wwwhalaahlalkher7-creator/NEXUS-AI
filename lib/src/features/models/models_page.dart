@@ -8,6 +8,7 @@ import 'model_repository.dart';
 import 'model_import_service.dart';
 import 'model_file_verifier.dart';
 import '../runtime/model_runtime_manager.dart';
+import '../runtime/rust_model_runtime_backend.dart';
 
 class ModelsPage extends StatefulWidget {
   const ModelsPage({super.key, this.store, this.importService, this.fileVerifier, this.runtimeManager});
@@ -26,10 +27,13 @@ class _ModelsPageState extends State<ModelsPage> {
   late final ModelImportService _importService;
   late final ModelFileVerifier _fileVerifier;
   late final ModelRuntimeManager _runtimeManager;
+  late final bool _ownsRuntimeManager;
   ModelSessionSnapshot? _runtimeSnapshot;
   late Future<List<ModelRecord>> _modelsFuture;
   final Set<String> _importingModelIds = {};
   final Set<String> _verifyingModelIds = {};
+  final Set<String> _loadingModelIds = {};
+  bool _unloadingRuntime = false;
 
   @override
   void initState() {
@@ -37,9 +41,31 @@ class _ModelsPageState extends State<ModelsPage> {
     _store = widget.store ?? ModelRepository();
     _importService = widget.importService ?? LocalGgufModelImportService();
     _fileVerifier = widget.fileVerifier ?? LocalModelFileVerifier();
+    _ownsRuntimeManager = widget.runtimeManager == null;
     _runtimeManager = widget.runtimeManager ??
-        ModelRuntimeManager(verifier: _fileVerifier);
+        ModelRuntimeManager(
+          verifier: _fileVerifier,
+          backend: const RustModelRuntimeBackend(),
+        );
+    // The manager may outlive this tab and retain an active native session.
+    _runtimeSnapshot = _runtimeManager.snapshot;
+    _runtimeManager.addListener(_handleRuntimeChanged);
     _modelsFuture = _store.list();
+  }
+
+  @override
+  void dispose() {
+    _runtimeManager.removeListener(_handleRuntimeChanged);
+    if (_ownsRuntimeManager) {
+      _runtimeManager.dispose();
+    }
+    super.dispose();
+  }
+
+  void _handleRuntimeChanged() {
+    if (mounted) {
+      setState(() => _runtimeSnapshot = _runtimeManager.snapshot);
+    }
   }
 
   void _reload() {
@@ -80,10 +106,10 @@ class _ModelsPageState extends State<ModelsPage> {
     if (_importingModelIds.contains(model.id)) {
       return;
     }
-    if (_runtimeManager.snapshot.isLoaded &&
-        _runtimeManager.snapshot.modelId == model.id) {
+    if (_runtimeManager.snapshot.modelId == model.id &&
+        (_runtimeManager.isBusy || _runtimeManager.snapshot.isLoaded)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أفرغ النموذج قبل استبدال ملفه.')),
+        const SnackBar(content: Text('أوقف جلسة النموذج أولاً قبل استبدال ملفه.')),
       );
       return;
     }
@@ -190,29 +216,63 @@ class _ModelsPageState extends State<ModelsPage> {
   }
 
   Future<void> _loadPreparedModel(ModelRecord model) async {
-    final result = await _runtimeManager.loadPrepared(model);
-    if (!mounted) {
+    if (_loadingModelIds.contains(model.id)) {
       return;
     }
-    setState(() => _runtimeSnapshot = result);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(result.message)),
-    );
+    setState(() => _loadingModelIds.add(model.id));
+    try {
+      final result = await _runtimeManager.loadPrepared(model);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _runtimeSnapshot = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تحميل النموذج: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loadingModelIds.remove(model.id));
+      }
+    }
   }
 
   Future<void> _unloadRuntime() async {
-    final result = await _runtimeManager.unload();
-    if (!mounted) {
+    if (_unloadingRuntime) {
       return;
     }
-    setState(() => _runtimeSnapshot = result);
+    setState(() => _unloadingRuntime = true);
+    try {
+      final result = await _runtimeManager.unload();
+      if (!mounted) {
+        return;
+      }
+      setState(() => _runtimeSnapshot = result);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تفريغ النموذج: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _unloadingRuntime = false);
+      }
+    }
   }
 
   Future<void> _deleteModel(ModelRecord model) async {
-    if (_runtimeManager.snapshot.isLoaded &&
-        _runtimeManager.snapshot.modelId == model.id) {
+    if (_runtimeManager.snapshot.modelId == model.id &&
+        (_runtimeManager.isBusy || _runtimeManager.snapshot.isLoaded)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أفرغ النموذج قبل حذف سجله.')),
+        const SnackBar(content: Text('أوقف جلسة النموذج أولاً قبل حذف سجله.')),
       );
       return;
     }
@@ -311,7 +371,8 @@ class _ModelsPageState extends State<ModelsPage> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '${models.length} سجل محلي · لا يوجد نموذج نشط حالياً',
+                  '${models.length} سجل محلي · '
+                  '${_runtimeManager.snapshot.isLoaded ? 'يوجد نموذج نشط على CPU' : 'لا يوجد نموذج نشط حالياً'}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 14),
@@ -384,16 +445,36 @@ class _ModelsPageState extends State<ModelsPage> {
                                       _runtimeSnapshot?.state == ModelSessionState.readyToLoad &&
                                       _runtimeSnapshot?.modelId == model.id)
                                     FilledButton.tonalIcon(
-                                      onPressed: () => _loadPreparedModel(model),
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: const Text('تحميل النموذج'),
+                                      onPressed: _loadingModelIds.contains(model.id)
+                                          ? null
+                                          : () => _loadPreparedModel(model),
+                                      icon: _loadingModelIds.contains(model.id)
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Icon(Icons.play_arrow),
+                                      label: Text(
+                                        _loadingModelIds.contains(model.id)
+                                            ? 'جارٍ تحميل الأوزان…'
+                                            : 'تحميل النموذج',
+                                      ),
                                     ),
                                   if (_runtimeSnapshot?.state == ModelSessionState.loaded &&
                                       _runtimeSnapshot?.modelId == model.id)
                                     TextButton.icon(
-                                      onPressed: _unloadRuntime,
-                                      icon: const Icon(Icons.stop_circle_outlined),
-                                      label: const Text('تفريغ النموذج'),
+                                      onPressed: _unloadingRuntime ? null : _unloadRuntime,
+                                      icon: _unloadingRuntime
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Icon(Icons.stop_circle_outlined),
+                                      label: Text(
+                                        _unloadingRuntime ? 'جارٍ التفريغ…' : 'تفريغ النموذج',
+                                      ),
                                     ),
                                 ],
                               ),
@@ -434,7 +515,7 @@ class _ModelsPageState extends State<ModelsPage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '${_formatBytes(model.sizeBytes!)} · مثبت محلياً، غير محمّل',
+                                    '${_formatBytes(model.sizeBytes!)} · مثبت محلياً${_runtimeSnapshot?.state == ModelSessionState.loaded && _runtimeSnapshot?.modelId == model.id ? ' · محمّل على CPU' : ' · غير محمّل'}',
                                     style: Theme.of(context).textTheme.bodySmall,
                                   ),
                                   if (model.architecture != null || model.contextLength != null || model.blockCount != null) ...[

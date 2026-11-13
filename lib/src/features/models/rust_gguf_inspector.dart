@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import '../../rust/api/simple.dart' as rust_api;
-import '../../rust/frb_generated.dart';
+import '../runtime/rust_bridge_initializer.dart';
 
 class GgufInspection {
   const GgufInspection({
@@ -40,14 +40,11 @@ class GgufInspection {
 }
 
 class RustGgufInspector {
-  static Future<void>? _initialization;
-
   Future<GgufInspection> inspect(String path) async {
     if (!Platform.isAndroid) {
       throw UnsupportedError('فحص ملفات GGUF عبر Rust متاح على Android حالياً.');
     }
-    _initialization ??= RustLib.init();
-    await _initialization;
+    await RustBridgeInitializer.ensureInitialized();
     final result = await rust_api.inspectGgufModelFile(path: path);
     return GgufInspection(
       validHeader: result.validHeader,
