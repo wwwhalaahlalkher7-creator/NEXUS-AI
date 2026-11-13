@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4.1: FRB Cargokit dependency fix
+# NEXUS AI — Alpha 1.4.2: Rust native module conflict fix
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -39,7 +39,7 @@ generates the Cargokit `rust_builder/` package used to compile and bundle the
 Rust bridge; CI performs this integration automatically.
 
 
-## Alpha 1.4.1 CI correction
+## Alpha 1.4.1 CI correction (retained)
 
 The Cargokit integration package generated under `rust_builder/` is named
 `rust_lib_nexus_app`. The root Flutter manifest must use that exact package key
@@ -48,3 +48,13 @@ CI workflow and `scripts/integrate_bridge.sh` now verify both names before
 resolving dependencies. This fixes the FRB integration failure where Pub
 reported that `rust_lib_nexus_app` did not match the previously declared
 `rust_builder` dependency name.
+
+
+## Alpha 1.4.2 Rust module correction
+
+Removed the duplicate `core/runtime/src/native.rs` module declaration. The
+canonical module remains `core/runtime/src/native/mod.rs`, which exports the
+existing `engine` implementation from `core/runtime/src/native/engine.rs`.
+Rust rejects having both `native.rs` and `native/mod.rs` for the same module
+(`E0761`); this correction resolves that source-layout conflict without
+changing the native loader or the llama.cpp adapter behavior.

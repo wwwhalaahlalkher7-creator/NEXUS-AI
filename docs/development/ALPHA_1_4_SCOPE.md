@@ -1,4 +1,4 @@
-# Alpha 1.4.1 — FRB Cargokit dependency correction
+# Alpha 1.4.2 — Rust native module conflict correction
 
 ## Goal
 
@@ -41,3 +41,11 @@ Cargokit generates `rust_builder/pubspec.yaml` with package name
 using that package name, while retaining `path: rust_builder`. CI and the local
 integration script assert the generated package name and dependency mapping.
 No llama.cpp runtime behavior changed in this patch.
+
+
+## Alpha 1.4.2 source-layout correction
+
+The runtime contained both `src/native.rs` and `src/native/mod.rs`, which are
+competing Rust module source paths for `mod native;`. The redundant `src/native.rs`
+was removed. The directory module and its `engine.rs` implementation are retained.
+This is a compile-time source-layout correction; runtime behavior is unchanged.
