@@ -1,4 +1,4 @@
-# NEXUS AI — Alpha 1.4.3: FRB module deduplication fix
+# NEXUS AI — Alpha 1.4.4: FRB module deduplication fix
 
 NEXUS is a local-first personal AI platform. This milestone begins the real native integration of `llama.cpp` for Android ARM64.
 
@@ -90,3 +90,19 @@ host Rust checks no longer report it as unused.
 A fixture reproducing the injected-comment plus duplicate-declaration case was
 run through the helper twice and passed structural assertions. Full Rust and
 Android builds remain to be confirmed by GitHub Actions.
+
+
+## Alpha 1.4.4 Flutter Material package and runtime status correction
+
+The app now uses the standalone official `material_ui` package consistently
+instead of mixing it with the deprecated `package:flutter/material.dart`
+entrypoint. The dependency is declared explicitly, and app localization delegates
+come from `material_ui`. This aligns with the Flutter 3.50+ migration.
+
+The unavailable GGUF runtime status now explicitly reports that the engine is
+not available until native model loading is connected. It keeps the session in
+`readyToLoad`; it never marks a model as loaded without a functioning backend.
+The FRB cleanup also removes stale attributes attached to deleted duplicate
+module declarations.
+
+See `docs/development/ALPHA_1_4_4_MATERIAL_UI_RUNTIME_TEST_FIX.md`.

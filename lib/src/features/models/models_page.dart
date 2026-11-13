@@ -1,7 +1,7 @@
 // The remaining `if` forms in this file are collection elements, not statements.
 // ignore_for_file: curly_braces_in_flow_control_structures
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'model_record.dart';
 import 'model_repository.dart';

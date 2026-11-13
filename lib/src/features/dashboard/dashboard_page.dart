@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../runtime/core_runtime_card.dart';
 import '../runtime/core_runtime_service.dart';
@@ -97,6 +97,26 @@ class _StatusCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.radio_button_unchecked_rounded,
+                      size: 18,
+                      color: scheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'لا يوجد نموذج ذكاء اصطناعي نشط',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                              color: scheme.onPrimaryContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

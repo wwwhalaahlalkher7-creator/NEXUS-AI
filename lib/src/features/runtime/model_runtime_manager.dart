@@ -138,7 +138,7 @@ class ModelRuntimeManager {
         state: ModelSessionState.readyToLoad,
         message: _backend.isAvailable
             ? 'اجتاز النموذج فحوص الملف والسياسة. لم يبدأ التحميل بعد.'
-            : 'اجتاز النموذج فحوص الملف والسياسة، لكن واجهة تحميل GGUF لم تُربط بعد.',
+            : 'اجتاز النموذج فحوص الملف والسياسة، لكن محرك تحميل GGUF غير متاح بعد لأن الربط الأصلي لم يكتمل.',
         modelId: model.id,
         modelFileBytes: actualSize,
       );
@@ -162,7 +162,7 @@ class ModelRuntimeManager {
         // is reported as loaded.
         _snapshot = ModelSessionSnapshot(
           state: ModelSessionState.readyToLoad,
-          message: 'النموذج اجتاز الفحص، لكن مسار تحميل GGUF لم يُربط بعد بمدير جلسات النماذج.',
+          message: 'النموذج اجتاز الفحص، لكن محرك تحميل GGUF غير متاح لأن الربط الأصلي لم يكتمل بعد.',
           modelId: model.id,
           modelFileBytes: _snapshot.modelFileBytes,
         );

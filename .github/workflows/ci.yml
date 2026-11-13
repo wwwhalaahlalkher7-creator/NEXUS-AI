@@ -437,6 +437,21 @@ jobs:
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Verify standalone Material UI imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -nF "package:flutter/material.dart" lib test; then
+            echo "::error::Legacy Material imports are not allowed; use package:material_ui/material_ui.dart."
+            exit 1
+          fi
+          if grep -R -nF "package:flutter_localizations/flutter_localizations.dart" lib test; then
+            echo "::error::Use GlobalMaterialLocalizations from package:material_ui/material_ui.dart."
+            exit 1
+          fi
+          grep -Eq '^  material_ui: \^1\.11\.0$' pubspec.yaml
+          grep -Fq 'GlobalMaterialLocalizations.delegates' lib/main.dart
+
       - name: Resolve Flutter dependencies
         run: flutter pub get
 

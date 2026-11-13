@@ -47,6 +47,15 @@ else:
     module_index = indices[0]
     for duplicate_index in reversed(indices[1:]):
         del lines[duplicate_index]
+        # Remove the narrow allowance that belonged to the duplicate too;
+        # otherwise it becomes an accidental attribute on the next Rust item.
+        if (
+            duplicate_index > 0
+            and lines[duplicate_index - 1].strip() == "#[allow(unsafe_code)]"
+        ):
+            del lines[duplicate_index - 1]
+            if duplicate_index - 1 < module_index:
+                module_index -= 1
         if duplicate_index < module_index:
             module_index -= 1
 
