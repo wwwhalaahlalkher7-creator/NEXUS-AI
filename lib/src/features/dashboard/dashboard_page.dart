@@ -91,7 +91,7 @@ class _StatusCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'محرك llama.cpp الأصلي — Alpha 1.7',
+                  'محرك llama.cpp الأصلي — Alpha 1.9',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
@@ -99,7 +99,7 @@ class _StatusCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'أضيف مسار توليد النص المحلي: Tokenization وPrompt Evaluation وSampling وتدفق الاستجابة والإيقاف. يلزم اختبار أول نموذج فعلياً على Android.',
+                  'أضيف سياق المحادثة متعدد الأدوار وربط الرسائل السابقة بقالب المحادثة المحلي، مع التوليد التدريجي والإيقاف على Android ARM64. يلزم اختبار نموذج فعلياً على الجهاز.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onPrimaryContainer,
                       ),

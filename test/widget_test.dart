@@ -9,10 +9,14 @@ void main() {
 
       expect(find.text('NEXUS AI'), findsOneWidget);
       expect(find.text('مرحباً بك في NEXUS'), findsOneWidget);
-      expect(
-        find.textContaining('لا يوجد نموذج ذكاء اصطناعي نشط'),
-        findsOneWidget,
+      final unloadedModel = find.text('لا يوجد نموذج محمّل');
+      await tester.scrollUntilVisible(
+        unloadedModel,
+        240,
+        scrollable: find.byType(Scrollable).first,
       );
+      await tester.pumpAndSettle();
+      expect(unloadedModel, findsOneWidget);
     },
   );
 }

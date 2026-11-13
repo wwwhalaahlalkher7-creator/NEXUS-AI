@@ -13,7 +13,7 @@ class _FakeCoreRuntimeService implements CoreRuntimeService {
   @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
-        coreVersion: '1.7.0',
+        coreVersion: '1.9.4',
         stage: 'alpha-1.9-multi-turn-context',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',
@@ -64,37 +64,56 @@ ModelRecord _model() => ModelRecord(
       updatedAtUnixMs: 1,
     );
 
+Future<void> _reveal(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(
+    target,
+    240,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets(
     'dashboard reflects shared model load and unload transitions',
     (tester) async {
-    final manager = ModelRuntimeManager(
-      verifier: _FakeVerifier(),
-      backend: _FakeBackend(),
-    );
-    addTearDown(manager.dispose);
+      final manager = ModelRuntimeManager(
+        verifier: _FakeVerifier(),
+        backend: _FakeBackend(),
+      );
+      addTearDown(manager.dispose);
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: DashboardPage(
-          runtimeService: const _FakeCoreRuntimeService(),
-          runtimeManager: manager,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DashboardPage(
+            runtimeService: const _FakeCoreRuntimeService(),
+            runtimeManager: manager,
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('لا يوجد نموذج محمّل'), findsOneWidget);
+      );
+      await tester.pumpAndSettle();
 
-    final model = _model();
-    await manager.prepare(model);
-    await manager.loadPrepared(model);
-    await tester.pumpAndSettle();
+      final unloadedLabel = find.text('لا يوجد نموذج محمّل');
+      await _reveal(tester, unloadedLabel);
+      expect(unloadedLabel, findsOneWidget);
 
-    expect(find.text('نموذج محمّل فعلياً على CPU'), findsOneWidget);
-    expect(find.text('السياق: 2048 رمز · افتح المحادثة لتجربة التوليد المحلي.'), findsOneWidget);
+      final model = _model();
+      await manager.prepare(model);
+      await manager.loadPrepared(model);
+      await tester.pumpAndSettle();
 
-    await manager.unload();
-    await tester.pumpAndSettle();
-    expect(find.text('لا يوجد نموذج محمّل'), findsOneWidget);
-  });
+      final loadedLabel = find.text('نموذج محمّل فعلياً على CPU');
+      await _reveal(tester, loadedLabel);
+      expect(loadedLabel, findsOneWidget);
+      expect(
+        find.text('السياق: 2048 رمز · افتح المحادثة لتجربة التوليد المحلي.'),
+        findsOneWidget,
+      );
+
+      await manager.unload();
+      await tester.pumpAndSettle();
+      await _reveal(tester, unloadedLabel);
+      expect(unloadedLabel, findsOneWidget);
+    },
+  );
 }

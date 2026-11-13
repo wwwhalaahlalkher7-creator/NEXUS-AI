@@ -492,7 +492,9 @@ class _InferencePageState extends State<InferencePage> {
         status: MessageStatus.streaming,
       );
     }).catchError((Object error) {
-      if (mounted) setState(() => _error = 'تعذر حفظ تقدم الاستجابة: $error');
+      if (mounted) {
+        setState(() => _error = 'تعذر حفظ تقدم الاستجابة: $error');
+      }
     });
   }
 
@@ -518,7 +520,9 @@ class _InferencePageState extends State<InferencePage> {
         status: status,
       );
     }).catchError((Object error) {
-      if (mounted) setState(() => _error = 'تعذر حفظ نتيجة التوليد: $error');
+      if (mounted) {
+        setState(() => _error = 'تعذر حفظ نتيجة التوليد: $error');
+      }
     });
     await _messageWriteTail;
     if (!mounted) return;
@@ -546,7 +550,9 @@ class _InferencePageState extends State<InferencePage> {
     try {
       await rust_api.cancelTextGeneration();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() => _error = 'تعذر إرسال طلب الإيقاف: $error');
     }
   }
@@ -773,9 +779,10 @@ class _InferencePageState extends State<InferencePage> {
                 Row(
                   children: [
                     SizedBox(
-                      width: 122,
+                      width: 148,
                       child: DropdownButtonFormField<int>(
                         value: _maxTokens,
+                        isExpanded: true,
                         isDense: true,
                         decoration: const InputDecoration(
                           labelText: 'حد الإخراج',
