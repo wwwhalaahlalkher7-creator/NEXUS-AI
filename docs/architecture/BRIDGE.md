@@ -43,7 +43,7 @@ A debug APK is for installation/testing only, not a signed Play Store release.
 
 Bridge acceptance still requires verifying model loading, streamed generation, and cancellation from Flutter on a physical Android device; successful code generation alone is insufficient.
 
-## llama.cpp native adapter (Alpha 1.4 → Alpha 1.7)
+## llama.cpp native adapter (Alpha 1.4 → Alpha 1.9)
 
 The Rust runtime dynamically loads the Android ARM64 `libnexus_llama_probe.so`
 adapter, which statically links the pinned upstream llama.cpp/GGML implementation.
@@ -70,10 +70,18 @@ sets an atomic cancellation request without waiting on the model/session lock.
 The bridge callback catches panics, handles split UTF-8 token pieces, and never
 allows a Rust panic to cross the C ABI boundary. `inference_available` becomes
 true only after a successful non-cancelled response for the active session and
-resets when the model is unloaded. Each generation clears KV memory, so history
-and multi-turn context are not yet supported.
+resets when the model is unloaded. Native KV memory is cleared after each request;
+Alpha 1.9 reconstructs multi-turn context by sending completed role-aware messages
+from local SQLite history through the model chat template on every request.
 
 
-## Alpha 1.7 generation API
+## Historical Alpha 1.7 single-prompt API
 
-`generate_text(sink, prompt, max_tokens, temperature, top_k, top_p, seed)` is a synchronous Rust operation on an FRB worker while its output is streamed through `StreamSink`. The native entrypoint validates model architecture, prompt bounds, sampling ranges, and context capacity before evaluation. Its first callback is a zero-length start signal; later callbacks contain byte pieces and token counts; its terminal result includes success, cancellation, or an error. Dart's Stop control is enabled only after the start marker.
+Alpha 1.7 originally exposed `generate_text(sink, prompt, max_tokens, temperature, top_k, top_p, seed)`. Alpha 1.9 replaces the single-prompt argument with a bounded role-aware message list; the native streaming lifecycle remains the same. Its first callback is a zero-length start signal; later callbacks contain byte pieces and token counts; its terminal result includes success, cancellation, an error, and the number of trimmed history messages.
+
+
+## Alpha 1.9 role-aware generation API
+
+`generate_text(sink, messages, max_tokens, temperature, top_k, top_p, seed)` accepts a bounded vector of `ChatMessageInputDto` values. Rust validates the roles and message bounds, keeps owned `CString` buffers alive for the synchronous native call, and passes an array of `repr(C)` message views to the NEXUS adapter. The adapter applies the model's embedded llama.cpp chat template to the full sequence and returns `trimmed_messages` with the terminal generation event.
+
+The context limit is measured with the loaded model vocabulary after formatting. Oldest complete user/assistant turns are removed until the formatted prompt plus the requested completion fits; system messages and the newest user turn are never removed. Flutter reports any trimming to the user.

@@ -40,7 +40,7 @@ pub fn unload_native_model() -> native::engine::NativeModelOperation {
 // The callback and user-data pair stays explicit across the internal Rust boundary.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_native_text(
-    prompt: &str,
+    messages: &[native::engine::NativeChatMessage],
     max_tokens: u32,
     temperature: f32,
     top_k: u32,
@@ -50,7 +50,7 @@ pub fn generate_native_text(
     user_data: *mut std::ffi::c_void,
 ) -> native::engine::NativeGenerationOperation {
     native::engine::generate_native_text(
-        prompt,
+        messages,
         max_tokens,
         temperature,
         top_k,
@@ -70,7 +70,7 @@ pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-1.7-real-text-generation",
+        stage: "alpha-1.9-multi-turn-context",
     }
 }
 
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-1.7-real-text-generation");
+        assert_eq!(get_core_info().stage, "alpha-1.9-multi-turn-context");
     }
 
     #[test]

@@ -38,6 +38,13 @@ pub struct ModelRuntimeOperationDto {
     pub message: String,
 }
 
+/// A role-aware message supplied to the local chat-template formatter.
+#[derive(Debug, Clone)]
+pub struct ChatMessageInputDto {
+    pub role: String,
+    pub content: String,
+}
+
 /// One incremental piece (or terminal status) from a local generation request.
 #[derive(Debug, Clone)]
 pub struct InferenceEventDto {
@@ -46,6 +53,7 @@ pub struct InferenceEventDto {
     pub done: bool,
     pub cancelled: bool,
     pub generated_tokens: u32,
+    pub trimmed_messages: u32,
     pub error: Option<String>,
 }
 
@@ -115,7 +123,7 @@ pub fn unload_gguf_model() -> ModelRuntimeOperationDto {
 /// chunks to Dart. The native call is synchronous on an FRB worker thread.
 pub fn generate_text(
     sink: StreamSink<InferenceEventDto>,
-    prompt: String,
+    messages: Vec<ChatMessageInputDto>,
     max_tokens: u32,
     temperature: f32,
     top_k: u32,
@@ -123,8 +131,15 @@ pub fn generate_text(
     seed: u32,
 ) {
     let mut state = stream_callback::StreamCallbackState::new(sink);
+    let native_messages: Vec<nexus_runtime::native::engine::NativeChatMessage> = messages
+        .into_iter()
+        .map(|message| nexus_runtime::native::engine::NativeChatMessage {
+            role: message.role,
+            content: message.content,
+        })
+        .collect();
     let result = nexus_runtime::generate_native_text(
-        &prompt,
+        &native_messages,
         max_tokens,
         temperature,
         top_k,
@@ -175,6 +190,7 @@ mod stream_callback {
                     done: false,
                     cancelled: false,
                     generated_tokens,
+                    trimmed_messages: 0,
                     error: None,
                 })
                 .is_ok()
@@ -231,6 +247,7 @@ mod stream_callback {
                 done: true,
                 cancelled: result.cancelled,
                 generated_tokens: result.generated_tokens,
+                trimmed_messages: result.trimmed_messages,
                 error,
             });
         }
@@ -260,6 +277,7 @@ mod stream_callback {
                         done: false,
                         cancelled: false,
                         generated_tokens: 0,
+                        trimmed_messages: 0,
                         error: None,
                     })
                     .is_ok()
@@ -354,7 +372,7 @@ mod tests {
     fn bridge_api_returns_core_metadata() {
         let info = get_core_info_for_app();
         assert_eq!(info.name, "NEXUS AI");
-        assert_eq!(info.stage, "alpha-1.7-real-text-generation");
+        assert_eq!(info.stage, "alpha-1.9-multi-turn-context");
     }
 
     #[test]
@@ -363,7 +381,7 @@ mod tests {
         assert!(diagnostics.bridge_connected);
         assert!(!diagnostics.inference_available);
         assert!(!diagnostics.model_loaded);
-        assert_eq!(diagnostics.stage, "alpha-1.7-real-text-generation");
+        assert_eq!(diagnostics.stage, "alpha-1.9-multi-turn-context");
         assert_eq!(diagnostics.model_registry, "flutter_sqlite");
         #[cfg(not(target_os = "android"))]
         assert!(!diagnostics.inference_available);

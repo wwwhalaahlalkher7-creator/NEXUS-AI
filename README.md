@@ -1,6 +1,6 @@
-# NEXUS AI — Alpha 1.8.0: Local conversation history
+# NEXUS AI — Alpha 1.9.0: Multi-turn conversation context
 
-NEXUS is a local-first personal AI platform. Alpha 1.8 adds persistent local conversations and message recovery on top of Alpha 1.7's Android ARM64 GGUF text-generation path. Conversation records and messages are stored in SQLite on-device. Prompt composition remains single-turn in this milestone: prior messages are displayed and retained, but are not yet fed back into the model context.
+NEXUS is a local-first personal AI platform. Alpha 1.9 connects the durable SQLite conversation history to the active GGUF model as role-aware messages. Flutter selects completed turns, Rust validates and marshals the messages, and the native llama.cpp adapter applies the GGUF chat template and counts the resulting tokens. When the formatted prompt plus requested output does not fit, the adapter removes oldest complete turns while preserving system messages and the current user message.
 
 ## Alpha 1.7 generation path
 
@@ -10,18 +10,18 @@ NEXUS is a local-first personal AI platform. Alpha 1.8 adds persistent local con
 - Stream decoded token pieces through the Rust bridge, assembling split UTF-8 sequences safely.
 - Signal generation start before prompt evaluation so the Stop action is available during long prompt processing.
 - Cancel through an atomic flag and llama.cpp CPU abort callback without acquiring the model/session mutex.
-- Clear the context KV memory after every request. Conversation history is not retained.
+- Clear native KV memory after every request; the current Alpha 1.9 flow reconstructs multi-turn context from completed SQLite messages for each request.
 - Report inference as verified only after a complete non-cancelled response; unload resets that verification for the current model.
 
-The current UI exposes a **المحادثة** page with local conversation history, message recovery, an output cap selector, streamed responses, and a Stop action. Prompts remain independent single-turn inference requests until the multi-turn context milestone. The first target remains Android `arm64-v8a` CPU inference.
+The current UI exposes a **المحادثة** page with local conversation history, message recovery, an output cap selector, role-aware multi-turn context, tokenizer-accurate context trimming, streamed responses, and a Stop action. The first target remains Android `arm64-v8a` CPU inference.
 
 ## Alpha 1.7 boundaries
 
-- Prompt limit: 16 KiB UTF-8; formatted prompt: 64 KiB.
+- Per-request conversation payload: up to 64 completed messages and 48 KiB UTF-8 before native token-aware trimming; formatted prompt: 64 KiB.
 - Output limit: 1–1024 tokens in native code; the UI offers 64, 128, 256, and 512.
 - Context size: 512–4096 tokens; CPU threads: 1–8.
 - Decoder-only text models are supported; encoder/decoder and diffusion models are rejected. Embedded templates must be supported by the pinned llama.cpp helper or an explicit template error is returned.
-- Single-file GGUF only. Split GGUF shards, conversation history, tool calling, vision/audio input, GPU offload, and distributed inference are not part of this milestone.
+- Single-file GGUF only. Split GGUF shards, tool execution, vision/audio input, GPU offload, and distributed inference are not part of this milestone. Tool-role messages are transport-capable but no tool execution engine is exposed.
 - The host C ABI contract test uses a fake llama API. Only CI's pinned Android NDK build and a physical-device smoke test can verify the actual engine integration.
 
 
@@ -53,7 +53,10 @@ GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles th
 
 The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-See `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`,
+Flutter package version: `1.9.0+26`; Rust workspace version: `1.9.0`.
+
+See `docs/development/ALPHA_1_9_MULTI_TURN_CONTEXT.md`,
+`docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`,
 `docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`,
 `docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`, and
 `docs/architecture/LLAMA_CPP_ANDROID.md`.
@@ -244,7 +247,7 @@ The CI workflow verifies the NEXUS native C ABI exports and generated FRB
 load/unload/generate/cancel APIs. A host-side adapter contract test uses a fake
 llama API for deterministic lifecycle tests; only the NDK build against the
 pinned upstream source can establish ABI compatibility with that exact engine.
-The Alpha 1.8 SQLite migration contract is also executed on the host.
+The Alpha 1.8 SQLite migration and Alpha 1.9 multi-turn context contracts are also executed on the host.
 
 See `docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`.
 
@@ -253,7 +256,7 @@ See `docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`.
 
 Alpha 1.7 adds the first actual inference path on top of the Alpha 1.6 model lifecycle. It uses the pinned llama.cpp C API for prompt tokenization, optional embedded chat-template formatting, bounded prompt evaluation, Top-K / Top-P / temperature sampling, token-to-piece decoding, and incremental output over Flutter Rust Bridge. The native C ABI start event unlocks cancellation before the first generated token, and cancellation does not wait for the model mutex.
 
-Inference verification is scoped to the active model session and is reset when that session is unloaded. A loaded model is not considered inference-verified until one complete non-cancelled response produces at least one token. Each request clears its KV cache; no prior turns are retained. This remains an Alpha single-turn text interface, not yet a full conversational agent runtime.
+Inference verification is scoped to the active model session and is reset when that session is unloaded. A loaded model is not considered inference-verified until one complete non-cancelled response produces at least one token. Alpha 1.7 initially sent one prompt per request; Alpha 1.9 now reconstructs multi-turn prompt context from the SQLite conversation history while still clearing native KV memory between calls. This is conversational context, not yet a full agent/tool runtime.
 
 See `docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`.
 
@@ -262,6 +265,15 @@ See `docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`.
 
 Alpha 1.8 connects the existing SQLite conversation tables to the inference screen. The first user message creates a titled conversation; user messages and assistant drafts are persisted, streaming output is checkpointed, and terminal messages are marked complete, cancelled, or failed. The history sheet restores recent conversations and supports confirmed deletion, while interrupted streaming rows are recovered as failed messages the next time the chat page is opened. SQLite schema version 4 preserves existing rows while adding the explicit `cancelled` status.
 
-This is persistence and UI continuity, not multi-turn inference: Alpha 1.8 still sends each prompt to the model independently. Multi-turn prompt assembly and context-window budgeting remain a separate milestone.
+At Alpha 1.8 this was persistence and UI continuity only: that release sent each prompt to the model independently. Alpha 1.9 supersedes this limitation by assembling role-aware history and budgeting the formatted prompt against the loaded model context.
 
 The host-side `scripts/test_conversation_migration.py` executes the migration SQL against SQLite and checks data preservation, status validation, and cascading deletion. See `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`.
+
+
+## Alpha 1.9.0 — Multi-turn conversation context
+
+Alpha 1.9 passes completed `system`, `user`, `assistant`, and `tool` messages from the SQLite-backed inference page through the typed Flutter Rust Bridge API. Rust validates role count, message content, the current-turn boundary, payload size, and NUL safety before creating stable C strings for the native C ABI. The adapter applies the active GGUF chat template to the full role-aware message sequence rather than wrapping only the latest user text.
+
+The formatted prompt is tokenized with the loaded model vocabulary. If prompt tokens plus the requested completion exceed the actual loaded context, the adapter removes the oldest complete user/assistant turn and re-applies the model template until the request fits. System messages and the newest user message are retained. The terminal stream event reports how many messages were removed so the UI can show a non-error context notice. Context KV memory is still cleared after each call; multi-turn state is reconstructed from local history on each request, not retained in native memory.
+
+The host C ABI contract test uses a fake llama API and verifies multi-role template input, current-user turn validation, context overflow, old-turn trimming, cancellation, and the trim count. This is a deterministic contract test only; GitHub Actions must still generate FRB bindings, run Rust and Flutter gates, and compile the pinned upstream llama.cpp adapter for Android ARM64. A physical-device test is still required to validate model-specific template behaviour and memory use.

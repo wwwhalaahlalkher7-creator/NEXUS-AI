@@ -10,6 +10,13 @@ use std::fmt;
 pub type NativeTokenCallback =
     unsafe extern "C" fn(*const c_char, usize, u32, *mut c_void) -> i32;
 
+/// One role-aware message passed to the native chat-template formatter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeEngineStatus {
     pub available: bool,
@@ -25,6 +32,7 @@ pub struct NativeGenerationOperation {
     pub success: bool,
     pub cancelled: bool,
     pub generated_tokens: u32,
+    pub trimmed_messages: u32,
     pub message: String,
 }
 
@@ -54,7 +62,8 @@ impl NativeEngineStatus {
 #[allow(unsafe_code)]
 mod android {
     use super::{
-        NativeEngineStatus, NativeGenerationOperation, NativeModelOperation, NativeTokenCallback,
+        NativeChatMessage, NativeEngineStatus, NativeGenerationOperation, NativeModelOperation,
+        NativeTokenCallback,
     };
     use libloading::Library;
     use std::ffi::{c_char, c_void, CStr, CString};
@@ -69,8 +78,15 @@ mod android {
     type LastErrorFn = unsafe extern "C" fn() -> *const c_char;
     type InferenceAvailableFn = unsafe extern "C" fn() -> i32;
     type CancelGenerationFn = unsafe extern "C" fn() -> i32;
+    #[repr(C)]
+    struct ChatMessageFfi {
+        role: *const c_char,
+        content: *const c_char,
+    }
+
     type GenerateFn = unsafe extern "C" fn(
-        *const c_char,
+        *const ChatMessageFfi,
+        usize,
         u32,
         f32,
         u32,
@@ -78,6 +94,7 @@ mod android {
         u32,
         NativeTokenCallback,
         *mut c_void,
+        *mut u32,
         *mut u32,
     ) -> i32;
 
@@ -345,7 +362,7 @@ mod android {
     // synchronous pair; keeping them explicit avoids storing callback state globally.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn generate_text(
-        prompt: &str,
+        messages: &[NativeChatMessage],
         max_tokens: u32,
         temperature: f32,
         top_k: u32,
@@ -354,15 +371,18 @@ mod android {
         callback: NativeTokenCallback,
         user_data: *mut c_void,
     ) -> NativeGenerationOperation {
-        if prompt.trim().is_empty() {
-            return NativeGenerationOperation {
-                success: false,
-                cancelled: false,
-                generated_tokens: 0,
-                message: "أدخل سؤالاً أو تعليماً قبل بدء التوليد.".to_owned(),
-            };
-        }
-        if prompt.len() > 16 * 1024
+        let total_bytes = messages
+            .iter()
+            .map(|message| message.content.len())
+            .sum::<usize>();
+        let valid_roles = ["system", "user", "assistant", "tool"];
+        if messages.is_empty()
+            || messages.len() > 64
+            || total_bytes > 64 * 1024
+            || messages.iter().any(|message| {
+                message.content.trim().is_empty() || !valid_roles.contains(&message.role.as_str())
+            })
+            || messages.last().map(|message| message.role.as_str()) != Some("user")
             || !(1..=1024).contains(&max_tokens)
             || !(0.05..=2.0).contains(&temperature)
             || !(1..=100).contains(&top_k)
@@ -372,27 +392,48 @@ mod android {
                 success: false,
                 cancelled: false,
                 generated_tokens: 0,
-                message: "إعدادات التوليد خارج الحدود الآمنة.".to_owned(),
+                trimmed_messages: 0,
+                message: "المحادثة أو إعدادات التوليد خارج الحدود الآمنة.".to_owned(),
             };
         }
-        let prompt = match CString::new(prompt) {
+        let owned_messages: Result<Vec<(CString, CString)>, _> = messages
+            .iter()
+            .map(|message| {
+                Ok((
+                    CString::new(message.role.as_str())?,
+                    CString::new(message.content.as_str())?,
+                ))
+            })
+            .collect();
+        let owned_messages = match owned_messages {
             Ok(value) => value,
             Err(_) => {
                 return NativeGenerationOperation {
                     success: false,
                     cancelled: false,
                     generated_tokens: 0,
-                    message: "النص يحتوي على محرف NUL غير صالح.".to_owned(),
+                    trimmed_messages: 0,
+                    message: "تحتوي إحدى الرسائل على محرف NUL غير صالح.".to_owned(),
                 };
             }
         };
+        let ffi_messages: Vec<ChatMessageFfi> = owned_messages
+            .iter()
+            .map(|(role, content)| ChatMessageFfi {
+                role: role.as_ptr(),
+                content: content.as_ptr(),
+            })
+            .collect();
 
         match with_backend(|backend| {
             let mut generated_tokens = 0_u32;
-            // SAFETY: prompt and callback state remain alive for this synchronous call.
+            let mut trimmed_messages = 0_u32;
+            // SAFETY: message strings, pointer table, and callback state remain
+            // alive for this synchronous call.
             let result = unsafe {
                 (backend.generate)(
-                    prompt.as_ptr(),
+                    ffi_messages.as_ptr(),
+                    ffi_messages.len(),
                     max_tokens,
                     temperature,
                     top_k,
@@ -401,29 +442,40 @@ mod android {
                     callback,
                     user_data,
                     &mut generated_tokens,
+                    &mut trimmed_messages,
                 )
             };
-            match result {
-                1 if generated_tokens > 0 => Ok(NativeGenerationOperation {
+            let operation = match result {
+                1 if generated_tokens > 0 => NativeGenerationOperation {
                     success: true,
                     cancelled: false,
                     generated_tokens,
+                    trimmed_messages,
                     message: "اكتمل التوليد المحلي بنجاح.".to_owned(),
-                }),
-                2 => Ok(NativeGenerationOperation {
+                },
+                2 => NativeGenerationOperation {
                     success: false,
                     cancelled: true,
                     generated_tokens,
+                    trimmed_messages,
                     message: "أوقفت عملية التوليد.".to_owned(),
-                }),
-                _ => Err(read_last_error(backend, "فشل توليد النص عبر llama.cpp.")),
-            }
+                },
+                _ => NativeGenerationOperation {
+                    success: false,
+                    cancelled: false,
+                    generated_tokens,
+                    trimmed_messages,
+                    message: read_last_error(backend, "فشل توليد النص عبر llama.cpp."),
+                },
+            };
+            Ok(operation)
         }) {
             Ok(result) => result,
             Err(message) => NativeGenerationOperation {
                 success: false,
                 cancelled: false,
                 generated_tokens: 0,
+                trimmed_messages: 0,
                 message,
             },
         }
@@ -501,7 +553,7 @@ pub fn load_native_model(
 // The callback/user-data pair is part of the narrow native adapter boundary.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_native_text(
-    prompt: &str,
+    messages: &[NativeChatMessage],
     max_tokens: u32,
     temperature: f32,
     top_k: u32,
@@ -511,7 +563,7 @@ pub fn generate_native_text(
     user_data: *mut c_void,
 ) -> NativeGenerationOperation {
     android::generate_text(
-        prompt,
+        messages,
         max_tokens,
         temperature,
         top_k,
@@ -524,7 +576,7 @@ pub fn generate_native_text(
 
 #[cfg(not(target_os = "android"))]
 pub fn generate_native_text(
-    _prompt: &str,
+    _messages: &[NativeChatMessage],
     _max_tokens: u32,
     _temperature: f32,
     _top_k: u32,
@@ -537,6 +589,7 @@ pub fn generate_native_text(
         success: false,
         cancelled: false,
         generated_tokens: 0,
+        trimmed_messages: 0,
         message: "توليد النص المحلي متاح على Android ARM64 فقط.".to_owned(),
     }
 }
@@ -613,7 +666,10 @@ mod tests {
         }
 
         let result = generate_native_text(
-            "Hello",
+            &[NativeChatMessage {
+                role: "user".to_owned(),
+                content: "Hello".to_owned(),
+            }],
             128,
             0.7,
             40,
@@ -625,6 +681,7 @@ mod tests {
         assert!(!result.success);
         assert!(!result.cancelled);
         assert_eq!(result.generated_tokens, 0);
+        assert_eq!(result.trimmed_messages, 0);
         assert!(result.message.contains("Android"));
         assert!(!cancel_native_generation());
     }

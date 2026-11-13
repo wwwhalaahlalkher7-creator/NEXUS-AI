@@ -4,14 +4,14 @@ import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 
 import '../../rust/api/simple.dart' as rust_api;
+import '../conversations/conversation_context_builder.dart';
 import '../conversations/conversation_record.dart';
 import '../conversations/conversation_repository.dart';
 import '../runtime/model_runtime_manager.dart';
 import '../runtime/rust_bridge_initializer.dart';
 
 /// Local chat UI backed by SQLite and the active native GGUF session.
-/// Prompt history is stored locally; multi-turn prompt composition is a later
-/// stage.
+/// Completed role-aware messages are sent through the model's chat template.
 class InferencePage extends StatefulWidget {
   InferencePage({
     super.key,
@@ -37,6 +37,8 @@ class _InferencePageState extends State<InferencePage> {
   String? _currentAssistantMessageId;
   String _response = '';
   String? _error;
+  String? _contextNotice;
+  int _contextTrimmedMessages = 0;
   bool _generating = false;
   bool _canCancel = false;
   bool _generationCancelled = false;
@@ -99,6 +101,8 @@ class _InferencePageState extends State<InferencePage> {
       _messages = const [];
       _response = '';
       _error = null;
+      _contextNotice = null;
+      _contextTrimmedMessages = 0;
       _generationCancelled = false;
       _generatedTokens = 0;
       _promptController.clear();
@@ -124,6 +128,8 @@ class _InferencePageState extends State<InferencePage> {
         _response = '';
         _error = null;
         _generationCancelled = false;
+        _contextNotice = null;
+        _contextTrimmedMessages = 0;
         _generatedTokens = 0;
         _promptController.clear();
       });
@@ -325,6 +331,8 @@ class _InferencePageState extends State<InferencePage> {
       _generationCancelled = false;
       _response = '';
       _error = null;
+      _contextNotice = null;
+      _contextTrimmedMessages = 0;
       _generatedTokens = 0;
       _lastPersistedTokenCount = 0;
       _finalizing = false;
@@ -350,10 +358,25 @@ class _InferencePageState extends State<InferencePage> {
           await _repository.createAssistantDraft(conversationId);
       _currentAssistantMessageId = assistantDraft.id;
       final initialMessages = await _repository.messages(conversationId);
+      final contextSelection = ConversationContextBuilder.build(initialMessages);
+      final boundedPromptMessages = contextSelection.messages
+          .map((message) => rust_api.ChatMessageInputDto(
+                role: message.role,
+                content: message.content,
+              ))
+          .toList(growable: false);
       if (mounted) {
         setState(() {
           _messages = initialMessages;
           _promptController.clear();
+        });
+      }
+
+      if (contextSelection.droppedMessages > 0 && mounted) {
+        setState(() {
+          _contextTrimmedMessages = contextSelection.droppedMessages;
+          _contextNotice =
+              'اختُصرت ${_contextTrimmedMessages} رسالة قديمة لتجهيز السياق.';
         });
       }
 
@@ -366,7 +389,7 @@ class _InferencePageState extends State<InferencePage> {
       }
 
       final stream = rust_api.generateText(
-        prompt: prompt,
+        messages: boundedPromptMessages,
         maxTokens: _maxTokens,
         temperature: 0.7,
         topK: 40,
@@ -428,6 +451,11 @@ class _InferencePageState extends State<InferencePage> {
         _canCancel = false;
         _generationCancelled = event.cancelled;
         _error = event.error;
+        _contextTrimmedMessages += event.trimmedMessages;
+        if (_contextTrimmedMessages > 0) {
+          _contextNotice =
+              'اختُصر ${_contextTrimmedMessages} رسالة قديمة لتناسب نافذة سياق النموذج.';
+        }
       }
     });
 
@@ -682,6 +710,14 @@ class _InferencePageState extends State<InferencePage> {
               isError: true,
             ),
           ),
+        if (_contextNotice != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: _NoticeCard(
+              message: _contextNotice!,
+              icon: Icons.history_toggle_off_rounded,
+            ),
+          ),
         if (_generationCancelled)
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -693,7 +729,7 @@ class _InferencePageState extends State<InferencePage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Text(
-            'السجل محفوظ محلياً؛ لكن النموذج لا يستخدم الرسائل السابقة في التوليد بعد.',
+            'يستخدم النموذج أدوار المحادثة السابقة؛ وتُختصر الأدوار الأقدم تلقائياً عند امتلاء السياق.',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: colors.onSurfaceVariant,
                 ),

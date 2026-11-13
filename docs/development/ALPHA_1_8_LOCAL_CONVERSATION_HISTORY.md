@@ -46,12 +46,11 @@ is retained.
 - The platform remains local-first: conversation text is written to the local
   SQLite database and is not sent to a remote service.
 
-## Explicit non-goals
+## Explicit non-goals at Alpha 1.8
 
-- No prior turns are passed to `llama.cpp` yet.
-- No automatic context-window truncation or summarization is claimed.
-- No cross-device synchronization, cloud backup, export, or search is included.
-- The generation engine remains the Alpha 1.7 single-prompt path.
+- Prior turns were not passed to `llama.cpp` in this release; Alpha 1.9 adds role-aware messages and tokenizer-accurate context trimming.
+- No context summarization, cross-device synchronization, cloud backup, export, or search is included.
+- The generation engine in this release remains the Alpha 1.7 single-prompt path.
 
 ## Verification
 

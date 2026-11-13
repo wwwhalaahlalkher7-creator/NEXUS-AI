@@ -14,7 +14,7 @@ class _FakeCoreRuntimeService implements CoreRuntimeService {
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '1.7.0',
-        stage: 'alpha-1.7-real-text-generation',
+        stage: 'alpha-1.9-multi-turn-context',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',
         inferenceAvailable: false,

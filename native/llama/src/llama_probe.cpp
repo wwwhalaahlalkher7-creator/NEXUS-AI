@@ -1,12 +1,14 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -20,6 +22,13 @@
 #define NEXUS_EXPORT
 #endif
 
+// Stable NEXUS C ABI message layout. The caller owns all pointed-to strings
+// for the duration of nexus_llama_generate().
+struct NexusChatMessage {
+    const char *role;
+    const char *content;
+};
+
 namespace {
 constexpr std::uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr std::uint64_t kBaseReserveBytes = 384ULL * kMiB;
@@ -27,7 +36,8 @@ constexpr std::uint64_t kContextReservePer2kBytes = 128ULL * kMiB;
 constexpr std::uint32_t kMinContextTokens = 512;
 constexpr std::uint32_t kMaxContextTokens = 4096;
 constexpr std::int32_t kMaxThreads = 8;
-constexpr std::size_t kMaxPromptBytes = 16U * 1024U;
+constexpr std::size_t kMaxPromptBytes = 64U * 1024U;
+constexpr std::size_t kMaxChatMessages = 64U;
 constexpr std::uint32_t kMaxGenerationTokens = 1024;
 constexpr std::uint32_t kPromptBatchTokens = 128;
 constexpr std::size_t kMaxFormattedPromptBytes = 64U * 1024U;
@@ -343,7 +353,8 @@ NEXUS_EXPORT std::int32_t nexus_llama_cancel_generation() noexcept {
 }
 
 NEXUS_EXPORT std::int32_t nexus_llama_generate(
-    const char *prompt,
+    const NexusChatMessage *messages,
+    std::size_t message_count,
     std::uint32_t max_tokens,
     float temperature,
     std::uint32_t top_k,
@@ -351,13 +362,17 @@ NEXUS_EXPORT std::int32_t nexus_llama_generate(
     std::uint32_t seed,
     TokenPieceCallback on_token_piece,
     void *user_data,
-    std::uint32_t *generated_tokens) noexcept {
+    std::uint32_t *generated_tokens,
+    std::uint32_t *trimmed_messages) noexcept {
     try {
         if (generated_tokens != nullptr) {
             *generated_tokens = 0;
         }
-        if (prompt == nullptr || prompt[0] == '\0') {
-            set_error("أدخل نصاً غير فارغ قبل بدء التوليد.");
+        if (trimmed_messages != nullptr) {
+            *trimmed_messages = 0;
+        }
+        if (messages == nullptr || message_count == 0 || message_count > kMaxChatMessages) {
+            set_error("عدد رسائل المحادثة خارج النطاق المدعوم (1–64). ");
             return -1;
         }
         if (on_token_piece == nullptr) {
@@ -381,9 +396,39 @@ NEXUS_EXPORT std::int32_t nexus_llama_generate(
             return -1;
         }
 
-        const std::string prompt_text(prompt);
-        if (prompt_text.size() > kMaxPromptBytes) {
-            set_error("النص المدخل أطول من الحد المسموح (16 كيلوبايت).");
+        struct OwnedMessage {
+            std::string role;
+            std::string content;
+        };
+        std::vector<OwnedMessage> retained_messages;
+        retained_messages.reserve(message_count);
+        std::size_t total_message_bytes = 0;
+        bool has_user_message = false;
+        for (std::size_t index = 0; index < message_count; ++index) {
+            if (messages[index].role == nullptr || messages[index].content == nullptr) {
+                set_error("تحتوي المحادثة على رسالة غير مكتملة.");
+                return -1;
+            }
+            const std::string role(messages[index].role);
+            const std::string content(messages[index].content);
+            if (role != "system" && role != "user" && role != "assistant" && role != "tool") {
+                set_error("دور إحدى رسائل المحادثة غير مدعوم.");
+                return -1;
+            }
+            if (content.empty()) {
+                set_error("لا يمكن إرسال رسالة فارغة إلى المحرك.");
+                return -1;
+            }
+            if (content.size() > kMaxPromptBytes - total_message_bytes) {
+                set_error("تجاوز سجل المحادثة الحد الآمن البالغ 64 كيلوبايت.");
+                return -1;
+            }
+            total_message_bytes += content.size();
+            has_user_message = has_user_message || role == "user";
+            retained_messages.push_back(OwnedMessage{role, content});
+        }
+        if (!has_user_message || retained_messages.back().role != "user") {
+            set_error("يجب أن تنتهي المحادثة برسالة مستخدم جديدة.");
             return -1;
         }
 
@@ -413,86 +458,143 @@ NEXUS_EXPORT std::int32_t nexus_llama_generate(
             return -3;
         }
 
-        std::string formatted_prompt = prompt_text;
         const char *chat_template = llama_model_chat_template(session.model, nullptr);
-        if (chat_template != nullptr && chat_template[0] != '\0') {
-            llama_chat_message message{};
-            message.role = "user";
-            message.content = prompt_text.c_str();
-            std::vector<char> template_buffer(
-                std::min(kMaxFormattedPromptBytes, prompt_text.size() * 2U + 2048U));
-            if (template_buffer.empty()) {
-                set_error("تعذر حجز ذاكرة لتنسيق رسالة النموذج.");
-                return -3;
-            }
-            std::int32_t formatted_size = llama_chat_apply_template(
-                chat_template, &message, 1, true, template_buffer.data(),
-                static_cast<std::int32_t>(template_buffer.size()));
-            if (formatted_size < 0) {
-                set_error("تعذر تطبيق قالب المحادثة المضمن في النموذج.");
-                return -3;
-            }
-            if (static_cast<std::size_t>(formatted_size) > template_buffer.size()) {
-                if (static_cast<std::size_t>(formatted_size) > kMaxFormattedPromptBytes) {
-                    set_error("قالب المحادثة الناتج تجاوز الحد الآمن لحجم الإدخال.");
-                    return -3;
+        std::string formatted_prompt;
+        std::vector<llama_token> prompt_tokens;
+        std::uint32_t trimmed_message_count = 0;
+        std::int32_t prompt_token_count = 0;
+        auto format_and_tokenize = [&]() -> bool {
+            formatted_prompt.clear();
+            if (chat_template != nullptr && chat_template[0] != '\0') {
+                std::vector<llama_chat_message> template_messages;
+                template_messages.reserve(retained_messages.size());
+                std::size_t character_count = 0;
+                for (const auto &message : retained_messages) {
+                    template_messages.push_back(llama_chat_message{
+                        message.role.c_str(), message.content.c_str()});
+                    character_count += message.content.size() + message.role.size();
                 }
-                template_buffer.resize(static_cast<std::size_t>(formatted_size) + 1U);
-                formatted_size = llama_chat_apply_template(
-                    chat_template, &message, 1, true, template_buffer.data(),
-                    static_cast<std::int32_t>(template_buffer.size()));
-                if (formatted_size < 0 ||
-                    static_cast<std::size_t>(formatted_size) > template_buffer.size()) {
-                    set_error("فشل إنشاء Prompt صالح باستخدام قالب النموذج.");
-                    return -3;
+                const std::size_t initial_size = std::min(
+                    kMaxFormattedPromptBytes, character_count * 2U + 2048U);
+                if (initial_size == 0) {
+                    set_error("تعذر حجز ذاكرة لتنسيق المحادثة.");
+                    return false;
                 }
+                std::vector<char> template_buffer(initial_size);
+                std::int32_t formatted_size = llama_chat_apply_template(
+                    chat_template, template_messages.data(), template_messages.size(), true,
+                    template_buffer.data(), static_cast<std::int32_t>(template_buffer.size()));
+                if (formatted_size < 0) {
+                    set_error("تعذر تطبيق قالب المحادثة المضمن في النموذج.");
+                    return false;
+                }
+                if (static_cast<std::size_t>(formatted_size) > template_buffer.size()) {
+                    if (static_cast<std::size_t>(formatted_size) > kMaxFormattedPromptBytes) {
+                        set_error("قالب المحادثة الناتج تجاوز الحد الآمن لحجم الإدخال.");
+                        return false;
+                    }
+                    template_buffer.resize(static_cast<std::size_t>(formatted_size) + 1U);
+                    formatted_size = llama_chat_apply_template(
+                        chat_template, template_messages.data(), template_messages.size(), true,
+                        template_buffer.data(), static_cast<std::int32_t>(template_buffer.size()));
+                    if (formatted_size < 0 ||
+                        static_cast<std::size_t>(formatted_size) > template_buffer.size()) {
+                        set_error("فشل إنشاء Prompt صالح باستخدام قالب النموذج.");
+                        return false;
+                    }
+                }
+                formatted_prompt.assign(
+                    template_buffer.data(), static_cast<std::size_t>(formatted_size));
+            } else {
+                // Fallback for GGUF files without a supported chat template.
+                // Role labels preserve turn boundaries, but quality depends on
+                // the model's instruction tuning when no native template exists.
+                for (const auto &message : retained_messages) {
+                    const char *label = message.role == "system" ? "System" :
+                        message.role == "assistant" ? "Assistant" :
+                        message.role == "tool" ? "Tool" : "User";
+                    formatted_prompt.append(label).append(": ").append(message.content).append("\n");
+                }
+                formatted_prompt.append("Assistant:");
             }
-            formatted_prompt.assign(template_buffer.data(), static_cast<std::size_t>(formatted_size));
-        }
 
-        if (formatted_prompt.empty() || formatted_prompt.size() > kMaxFormattedPromptBytes ||
-            formatted_prompt.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
-            set_error("حجم Prompt النهائي خارج النطاق الآمن.");
-            return -3;
-        }
+            if (formatted_prompt.empty() || formatted_prompt.size() > kMaxFormattedPromptBytes ||
+                formatted_prompt.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+                set_error("حجم Prompt النهائي خارج النطاق الآمن.");
+                return false;
+            }
 
-        // Parse template control tokens but do not ask llama_tokenize to append
-        // model-configured EOS tokens. Insert BOS explicitly only when needed;
-        // this avoids both a missing BOS and a duplicate BOS from chat templates.
-        std::vector<llama_token> prompt_tokens(formatted_prompt.size() + 8U);
-        std::int32_t prompt_token_count = llama_tokenize(
-            vocab, formatted_prompt.data(), static_cast<std::int32_t>(formatted_prompt.size()),
-            prompt_tokens.data(), static_cast<std::int32_t>(prompt_tokens.size()), false, true);
-        if (prompt_token_count < 0) {
-            if (prompt_token_count == std::numeric_limits<std::int32_t>::min()) {
-                set_error("تجاوزت نتيجة تقطيع Prompt الحد العددي المدعوم.");
-                return -3;
-            }
-            const auto required = static_cast<std::size_t>(-prompt_token_count);
-            if (required == 0 || required > kMaxFormattedPromptBytes + 8U) {
-                set_error("تعذر تحديد حجم Tokens المطلوب للمدخل.");
-                return -3;
-            }
-            prompt_tokens.resize(required);
+            // Parse template control tokens without automatically appending EOS.
+            prompt_tokens.assign(formatted_prompt.size() + 8U, 0);
             prompt_token_count = llama_tokenize(
                 vocab, formatted_prompt.data(), static_cast<std::int32_t>(formatted_prompt.size()),
                 prompt_tokens.data(), static_cast<std::int32_t>(prompt_tokens.size()), false, true);
-        }
-        if (prompt_token_count > 0 && llama_vocab_get_add_bos(vocab)) {
-            const llama_token bos = llama_vocab_bos(vocab);
-            if (bos != LLAMA_TOKEN_NULL && prompt_tokens.front() != bos) {
-                prompt_tokens.insert(prompt_tokens.begin(), bos);
-                ++prompt_token_count;
+            if (prompt_token_count < 0) {
+                if (prompt_token_count == std::numeric_limits<std::int32_t>::min()) {
+                    set_error("تجاوزت نتيجة تقطيع Prompt الحد العددي المدعوم.");
+                    return false;
+                }
+                const auto required = static_cast<std::size_t>(-prompt_token_count);
+                if (required == 0 || required > kMaxFormattedPromptBytes + 8U) {
+                    set_error("تعذر تحديد حجم Tokens المطلوب للمدخل.");
+                    return false;
+                }
+                prompt_tokens.resize(required);
+                prompt_token_count = llama_tokenize(
+                    vocab, formatted_prompt.data(), static_cast<std::int32_t>(formatted_prompt.size()),
+                    prompt_tokens.data(), static_cast<std::int32_t>(prompt_tokens.size()), false, true);
             }
-        }
-        if (prompt_token_count <= 0 ||
-            static_cast<std::uint64_t>(prompt_token_count) + max_tokens > session.context_tokens) {
-            std::ostringstream message;
-            message << "حجم Prompt (" << prompt_token_count
-                    << " رمزاً) مع الإخراج المطلوب يتجاوز سياق النموذج ("
-                    << session.context_tokens << "). قلّل النص أو عدد رموز الإخراج.";
-            set_error(message.str());
-            return -4;
+            if (prompt_token_count > 0 && llama_vocab_get_add_bos(vocab)) {
+                const llama_token bos = llama_vocab_bos(vocab);
+                if (bos != LLAMA_TOKEN_NULL && prompt_tokens.front() != bos) {
+                    prompt_tokens.insert(prompt_tokens.begin(), bos);
+                    ++prompt_token_count;
+                }
+            }
+            if (prompt_token_count <= 0) {
+                set_error("تعذر تحويل المحادثة إلى Tokens صالحة.");
+                return false;
+            }
+            prompt_tokens.resize(static_cast<std::size_t>(prompt_token_count));
+            return true;
+        };
+
+        // Tokenize using the model's actual vocabulary. If the prompt and the
+        // requested completion do not fit, remove the oldest complete turn while
+        // preserving every system message and the newest user message.
+        while (true) {
+            if (!format_and_tokenize()) {
+                return -3;
+            }
+            if (static_cast<std::uint64_t>(prompt_token_count) + max_tokens <=
+                session.context_tokens) {
+                break;
+            }
+
+            auto oldest = std::find_if(
+                retained_messages.begin(), retained_messages.end(),
+                [](const OwnedMessage &message) { return message.role != "system"; });
+            if (oldest == retained_messages.end() ||
+                std::next(oldest) == retained_messages.end()) {
+                std::ostringstream message;
+                message << "الرسالة الحالية تحتاج " << prompt_token_count
+                        << " رمزاً، بينما سياق النموذج " << session.context_tokens
+                        << ". قلّل نص الرسالة أو حد الإخراج.";
+                set_error(message.str());
+                return -4;
+            }
+
+            auto erase_end = std::next(oldest);
+            if (oldest->role == "user" && erase_end != retained_messages.end() &&
+                erase_end->role == "assistant" && std::next(erase_end) != retained_messages.end()) {
+                ++erase_end;
+            }
+            const auto removed = static_cast<std::uint32_t>(std::distance(oldest, erase_end));
+            retained_messages.erase(oldest, erase_end);
+            trimmed_message_count += removed;
+            if (trimmed_messages != nullptr) {
+                *trimmed_messages = trimmed_message_count;
+            }
         }
 
         SamplerGuard sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()));

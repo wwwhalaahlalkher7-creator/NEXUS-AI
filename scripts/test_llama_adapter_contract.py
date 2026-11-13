@@ -102,7 +102,7 @@ FAKE_IMPLEMENTATION = r'''#include "llama.h"
 #include <cstring>
 #include <new>
 
-namespace { const llama_vocab vocab{}; }
+namespace { const llama_vocab vocab{}; std::string last_tokenized_prompt; }
 llama_model_params llama_model_default_params() { return llama_model_params{0, false}; }
 llama_context_params llama_context_default_params() { return llama_context_params{512, 128, 128, 1, 2, 2, nullptr, nullptr}; }
 void llama_backend_init() {}
@@ -125,11 +125,27 @@ bool llama_model_has_decoder(const llama_model *) { return true; }
 bool llama_model_has_encoder(const llama_model *model) { return model && model->path.find("encoder") != std::string::npos; }
 bool llama_model_is_diffusion(const llama_model *) { return false; }
 const llama_vocab *llama_model_get_vocab(const llama_model *) { return &vocab; }
-const char *llama_model_chat_template(const llama_model *, const char *) { return nullptr; }
-std::int32_t llama_chat_apply_template(const char *, const llama_chat_message *, std::size_t, bool, char *, std::int32_t) { return -1; }
+const char *llama_model_chat_template(const llama_model *, const char *) { return "fake-template"; }
+std::int32_t llama_chat_apply_template(const char *, const llama_chat_message *messages,
+                                       std::size_t count, bool add_ass, char *buffer,
+                                       std::int32_t length) {
+    std::string formatted;
+    for (std::size_t i = 0; i < count; ++i) {
+        formatted += messages[i].role;
+        formatted += ":";
+        formatted += messages[i].content;
+        formatted += "\n";
+    }
+    if (add_ass) formatted += "assistant:";
+    if (formatted.size() > static_cast<std::size_t>(length)) return static_cast<std::int32_t>(formatted.size());
+    std::memcpy(buffer, formatted.data(), formatted.size());
+    return static_cast<std::int32_t>(formatted.size());
+}
+extern "C" const char *nexus_test_last_tokenized_prompt() { return last_tokenized_prompt.c_str(); }
 std::int32_t llama_tokenize(const llama_vocab *, const char *text, std::int32_t text_len,
                             llama_token *tokens, std::int32_t max_tokens, bool, bool) {
     if (text_len < 0) return -1;
+    last_tokenized_prompt.assign(text, static_cast<std::size_t>(text_len));
     if (max_tokens < text_len) return -text_len;
     for (std::int32_t i = 0; i < text_len; ++i) tokens[i] = 0x100 + static_cast<unsigned char>(text[i]);
     return text_len;
@@ -199,6 +215,7 @@ TEST_SOURCE = r'''#include <cassert>
 #include <unistd.h>
 
 using TokenCallback = std::int32_t (*)(const char *, std::size_t, std::uint32_t, void *);
+struct NexusChatMessage { const char *role; const char *content; };
 extern "C" {
 std::int32_t nexus_llama_backend_init() noexcept;
 const char *nexus_llama_version() noexcept;
@@ -208,9 +225,11 @@ std::int32_t nexus_llama_is_model_loaded() noexcept;
 std::uint32_t nexus_llama_loaded_context_tokens() noexcept;
 std::int32_t nexus_llama_inference_available() noexcept;
 std::int32_t nexus_llama_cancel_generation() noexcept;
-std::int32_t nexus_llama_generate(const char *, std::uint32_t, float, std::uint32_t, float,
-                                  std::uint32_t, TokenCallback, void *, std::uint32_t *) noexcept;
+std::int32_t nexus_llama_generate(const NexusChatMessage *, std::size_t, std::uint32_t, float,
+                                  std::uint32_t, float, std::uint32_t, TokenCallback, void *,
+                                  std::uint32_t *, std::uint32_t *) noexcept;
 const char *nexus_llama_last_error() noexcept;
+const char *nexus_test_last_tokenized_prompt();
 }
 struct Capture {
     std::string text;
@@ -253,8 +272,10 @@ int main() {
 
     Capture empty_capture{};
     std::uint32_t generated = 0;
-    assert(nexus_llama_generate("Hello", 16, 0.7F, 40, 0.92F, 0,
-                                capture_piece, &empty_capture, &generated) == -2);
+    std::uint32_t trimmed = 0;
+    const NexusChatMessage hello[] = {{"user", "Hello"}};
+    assert(nexus_llama_generate(hello, 1, 16, 0.7F, 40, 0.92F, 0,
+                                capture_piece, &empty_capture, &generated, &trimmed) == -2);
     assert(nexus_llama_cancel_generation() == 0);
 
     const auto model_a = make_file("nexus-model-a");
@@ -276,8 +297,9 @@ int main() {
     Capture cancelled_before_tokens{};
     cancelled_before_tokens.cancel_on_start = true;
     generated = 0;
-    assert(nexus_llama_generate("Stop before prompt evaluation", 32, 0.7F, 40, 0.92F, 7,
-                                capture_piece, &cancelled_before_tokens, &generated) == 2);
+    const NexusChatMessage stop_before[] = {{"user", "Stop before prompt evaluation"}};
+    assert(nexus_llama_generate(stop_before, 1, 32, 0.7F, 40, 0.92F, 7,
+                                capture_piece, &cancelled_before_tokens, &generated, &trimmed) == 2);
     assert(cancelled_before_tokens.text.empty());
     assert(cancelled_before_tokens.start_events == 1);
     assert(generated == 0);
@@ -287,8 +309,9 @@ int main() {
     Capture cancelled{};
     cancelled.cancel_first = true;
     generated = 0;
-    assert(nexus_llama_generate("Stop after first token", 32, 0.7F, 40, 0.92F, 7,
-                                capture_piece, &cancelled, &generated) == 2);
+    const NexusChatMessage stop_after[] = {{"user", "Stop after first token"}};
+    assert(nexus_llama_generate(stop_after, 1, 32, 0.7F, 40, 0.92F, 7,
+                                capture_piece, &cancelled, &generated, &trimmed) == 2);
     assert(cancelled.text == "N");
     assert(cancelled.start_events == 1);
     assert(generated == 1);
@@ -297,23 +320,57 @@ int main() {
 
     Capture response{};
     generated = 0;
-    assert(nexus_llama_generate("Hello", 32, 0.7F, 40, 0.92F, 7,
-                                capture_piece, &response, &generated) == 1);
+    assert(nexus_llama_generate(hello, 1, 32, 0.7F, 40, 0.92F, 7,
+                                capture_piece, &response, &generated, &trimmed) == 1);
     assert(response.text == "NEXUS");
     assert(response.start_events == 1);
     assert(generated == 5);
     assert(nexus_llama_inference_available() == 1);
 
-    assert(nexus_llama_generate("", 16, 0.7F, 40, 0.92F, 0,
-                                capture_piece, &response, &generated) == -1);
-    assert(nexus_llama_generate("bad", 1025, 0.7F, 40, 0.92F, 0,
-                                capture_piece, &response, &generated) == -1);
-    assert(nexus_llama_generate("bad", 16, 3.0F, 40, 0.92F, 0,
-                                capture_piece, &response, &generated) == -1);
+    const NexusChatMessage multi_turn[] = {
+        {"system", "Answer accurately."},
+        {"user", "Remember the number 42."},
+        {"assistant", "I will remember 42."},
+        {"user", "What number did I ask you to remember?"}
+    };
+    assert(nexus_llama_generate(multi_turn, 4, 32, 0.7F, 40, 0.92F, 7,
+                                capture_piece, &response, &generated, &trimmed) == 1);
+    assert(trimmed == 0);
+    const std::string formatted_multi_turn(nexus_test_last_tokenized_prompt());
+    assert(formatted_multi_turn.find("system:Answer accurately.") != std::string::npos);
+    assert(formatted_multi_turn.find("assistant:I will remember 42.") != std::string::npos);
+    assert(formatted_multi_turn.find("What number did I ask you to remember?") != std::string::npos);
+
+    const NexusChatMessage invalid_last_role[] = {
+        {"user", "question"}, {"assistant", "not a current user turn"}
+    };
+    assert(nexus_llama_generate(invalid_last_role, 2, 32, 0.7F, 40, 0.92F, 7,
+                                capture_piece, &response, &generated, &trimmed) == -1);
+
+    assert(nexus_llama_generate(nullptr, 1, 16, 0.7F, 40, 0.92F, 0,
+                                capture_piece, &response, &generated, &trimmed) == -1);
+    assert(nexus_llama_generate(hello, 1, 1025, 0.7F, 40, 0.92F, 0,
+                                capture_piece, &response, &generated, &trimmed) == -1);
+    assert(nexus_llama_generate(hello, 1, 16, 3.0F, 40, 0.92F, 0,
+                                capture_piece, &response, &generated, &trimmed) == -1);
 
     const std::string too_long_for_context(2000, 'x');
-    assert(nexus_llama_generate(too_long_for_context.c_str(), 100, 0.7F, 40, 0.92F, 0,
-                                capture_piece, &response, &generated) == -4);
+    const NexusChatMessage long_prompt[] = {{"user", too_long_for_context.c_str()}};
+    assert(nexus_llama_generate(long_prompt, 1, 100, 0.7F, 40, 0.92F, 0,
+                                capture_piece, &response, &generated, &trimmed) == -4);
+
+    // Multi-turn role order reaches the adapter and old complete turns are
+    // pruned until the current user message fits.
+    const NexusChatMessage long_history[] = {
+        {"user", too_long_for_context.c_str()}, {"assistant", "An old answer"},
+        {"user", "Current question"}
+    };
+    assert(nexus_llama_generate(long_history, 3, 100, 0.7F, 40, 0.92F, 0,
+                                capture_piece, &response, &generated, &trimmed) == 1);
+    assert(trimmed == 2);
+    assert(response.text.find("NEXUS") != std::string::npos);
+    assert(std::string(nexus_test_last_tokenized_prompt()).find("Current question") != std::string::npos);
+    assert(std::string(nexus_test_last_tokenized_prompt()).find(std::string(2000, 'x')) == std::string::npos);
 
     assert(nexus_llama_unload_model() == 1);
     assert(nexus_llama_is_model_loaded() == 0);

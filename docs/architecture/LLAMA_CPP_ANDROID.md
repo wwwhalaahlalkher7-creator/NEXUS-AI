@@ -24,10 +24,10 @@ The C++ adapter statically includes the upstream llama.cpp and GGML code, runs `
 - The C++ adapter catches exceptions at the C ABI boundary.
 - `libc++_shared.so` is bundled so the Android loader can resolve the shared C++ runtime. Upstream C++/GGML components are statically linked with position-independent code to avoid versioned JNI library-name mismatches.
 - The initial target is ARM64 only.
-- The first inference path supports decoder-only text models and a single prompt per request. Encoder/decoder and diffusion architectures are rejected.
+- The inference path supports decoder-only text models with role-aware multi-turn prompts formatted by the GGUF chat template. Encoder/decoder and diffusion architectures are rejected.
 - Prompt and output sizes are bounded against the active context. CPU threads are inherited from the loaded session; GPU offload remains disabled.
 - Generation holds the native session mutex so unload cannot release model memory during compute. Cancellation is independent: it sets an atomic flag read by both the token loop and llama.cpp abort callback.
-- The adapter clears KV memory before and after each request. Alpha 1.7 does not retain multi-turn chat context.
+- The adapter clears KV memory before and after each request. Multi-turn context is reconstructed from SQLite history for each request; the native KV cache is not retained between generations. The adapter tokenizes the formatted conversation and prunes oldest complete user/assistant turns if needed while preserving system messages and the newest user turn.
 - `inference_available` is a per-loaded-model verification flag. It becomes true only after a completed non-cancelled response with at least one output token, and resets when the model is unloaded.
 
 
@@ -41,3 +41,8 @@ NEXUS Alpha 1.6 currently imports a single GGUF file per model record. Split GGU
 The generation entrypoint follows the pinned v0.9.0 API in `llama.h`: optional `llama_chat_apply_template` (which supports a predefined set of templates, not arbitrary Jinja), `llama_tokenize`, prompt evaluation with `llama_batch_init` / `llama_decode`, a sampler chain (`top_k`, `top_p`, `temp`, `dist`), `llama_sampler_sample`, and `llama_token_to_piece`. Unsupported embedded templates fail explicitly instead of being silently bypassed. The C ABI calls a zero-byte start event as soon as generation becomes active, then emits byte pieces as tokens are sampled. Rust reassembles split UTF-8 sequences before publishing `InferenceEventDto` events to Dart. The Dart page exposes Stop only after this native start event.
 
 The pinned header documents the tokenization and token-to-piece contract, the chat-template output-size retry behavior, the sampler chain usage, and the CPU abort callback. See the official pinned source at [llama.h](https://github.com/ggml-org/llama.cpp/blob/cd959bae99ff4bed22bef2604f45241c09bbb8c8/include/llama.h).
+
+
+## Alpha 1.9 role-aware context
+
+The pinned v0.9.0 `llama_chat_apply_template` accepts a sequence of `llama_chat_message` values. NEXUS now passes the complete bounded role sequence (`system`, `user`, `assistant`, or `tool`) rather than a single synthetic user message. The formatted bytes are tokenized using the loaded GGUF vocabulary. If the prompt plus `max_tokens` exceeds `llama_n_ctx`, the adapter removes the oldest full user/assistant exchange and re-applies the template until it fits. The current user message and system messages are retained; when they cannot fit, generation fails with a clear context error instead of truncating the current request. The adapter returns the number of removed messages to Flutter in the terminal event.

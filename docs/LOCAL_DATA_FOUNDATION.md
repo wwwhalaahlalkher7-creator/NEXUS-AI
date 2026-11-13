@@ -1,8 +1,8 @@
 # NEXUS local data foundation (Alpha 0.4 work)
 
 This document records the SQLite persistence foundation introduced in Alpha
-0.4 and extended through Alpha 1.8. The current conversation screen uses this
-local store, while multi-turn model-context assembly remains a separate stage.
+0.4 and extended through Alpha 1.9. The current conversation screen uses this
+local store, and Alpha 1.9 reconstructs multi-turn model context from its completed messages.
 
 ## SQLite schema version 4
 
@@ -42,5 +42,7 @@ user messages and assistant drafts, checkpoints partial streamed output, and
 writes a terminal state on completion, cancellation, or failure. Recent
 conversations can be reopened or deleted from the history sheet. On startup,
 any message left in `streaming` by process termination is marked `failed`; its
-partial text is retained when available. This persistence layer does not yet
-compose historical messages into the native model prompt.
+partial text is retained when available. Since Alpha 1.9, completed historical messages are selected by
+`ConversationContextBuilder` and composed into the native role-aware model prompt.
+The native KV cache is still cleared after each request; continuity is rebuilt
+from SQLite rather than retaining a live KV session.
