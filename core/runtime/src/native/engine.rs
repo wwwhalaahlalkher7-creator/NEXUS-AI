@@ -575,6 +575,8 @@ pub fn generate_native_text(
 }
 
 #[cfg(not(target_os = "android"))]
+// Keep the host stub aligned with the Android adapter's callback/user-data ABI.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_native_text(
     _messages: &[NativeChatMessage],
     _max_tokens: u32,
