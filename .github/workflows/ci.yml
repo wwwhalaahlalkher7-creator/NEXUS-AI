@@ -506,6 +506,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # FRB generation/integration can insert its module declaration after
+          # the handwritten API module. Normalize the complete generated Rust
+          # workspace first, then keep a strict formatting check as a guard.
+          cargo fmt --all
           cargo fmt --all -- --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
