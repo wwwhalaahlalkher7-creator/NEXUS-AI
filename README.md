@@ -58,3 +58,12 @@ existing `engine` implementation from `core/runtime/src/native/engine.rs`.
 Rust rejects having both `native.rs` and `native/mod.rs` for the same module
 (`E0761`); this correction resolves that source-layout conflict without
 changing the native loader or the llama.cpp adapter behavior.
+
+
+## CI wait-time optimization
+
+The CI workflow now caches Rust/Cargo dependencies and FRB tools, restores the
+llama.cpp Android CMake build tree using a toolchain-aware cache key, uses the
+runner CPU allocation for native compilation, and retries APK builds only for
+recognized transient network failures. Tests and APK/native-library verification
+remain required. See `docs/development/WORKFLOW_SPEEDUP_ALPHA_1_4_2.md`.
