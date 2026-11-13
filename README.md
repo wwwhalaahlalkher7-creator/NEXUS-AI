@@ -50,6 +50,14 @@ reported that `rust_lib_nexus_app` did not match the previously declared
 `rust_builder` dependency name.
 
 
+## Alpha 1.4.2 FRB crate documentation ordering correction
+
+The CI speedup package exposed an ordering interaction between FRB generated
+module insertion and the narrowly scoped unsafe-code allow attribute. The
+`allow_generated_ffi.py` helper now keeps crate-level `//!` documentation at
+the top of `core/bridge/src/lib.rs` before the generated module declaration.
+See `docs/development/ALPHA_1_4_2_FRB_DOC_ORDER_FIX.md`.
+
 ## Alpha 1.4.2 Rust module correction
 
 Removed the duplicate `core/runtime/src/native.rs` module declaration. The
