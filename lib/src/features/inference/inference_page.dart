@@ -443,7 +443,9 @@ class _InferencePageState extends State<InferencePage> {
   void _handleGenerationEvent(rust_api.InferenceEventDto event) {
     if (!mounted) return;
     setState(() {
-      if (event.started) _canCancel = true;
+      if (event.started) {
+        _canCancel = true;
+      }
       _response += event.delta;
       _generatedTokens = event.generatedTokens;
       if (event.done) {
@@ -464,7 +466,9 @@ class _InferencePageState extends State<InferencePage> {
       _lastPersistedTokenCount = event.generatedTokens;
       _queueAssistantCheckpoint();
     }
-    if (event.delta.isNotEmpty) _scrollToBottom();
+    if (event.delta.isNotEmpty) {
+      _scrollToBottom();
+    }
 
     if (event.done) {
       final status = event.cancelled

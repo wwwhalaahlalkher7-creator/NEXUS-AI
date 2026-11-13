@@ -13,7 +13,7 @@ class _FakeCoreRuntimeService implements CoreRuntimeService {
   @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
-        coreVersion: '1.9.4',
+        coreVersion: '1.9.5',
         stage: 'alpha-1.9-multi-turn-context',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',

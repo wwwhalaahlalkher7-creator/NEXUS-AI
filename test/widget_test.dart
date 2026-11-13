@@ -13,7 +13,6 @@ void main() {
       await tester.scrollUntilVisible(
         unloadedModel,
         240,
-        scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
       expect(unloadedModel, findsOneWidget);
