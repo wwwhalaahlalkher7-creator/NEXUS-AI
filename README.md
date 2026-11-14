@@ -1,4 +1,10 @@
-# NEXUS AI — Alpha 2.8.0: Local privacy center
+# NEXUS AI — Alpha 2.8.1: Verification repair
+
+## Alpha 2.8.1 — Verification repair (`2.8.1+60`)
+
+This maintenance release fixes the BigInt ceiling-division type mismatch in model-fit estimation and makes the native runtime status card scrollable on short screens. The Flutter package metadata advances to `2.8.1+60`; the Rust workspace and native C ABI remain at `2.6.2`. The local privacy center and its SQLite v15 schema are carried forward unchanged. Flutter/Dart CI, Rust checks, Android ARM64 compilation, and physical-device acceptance remain required.
+
+---
 
 ## Alpha 2.8.0 — Local privacy center (`2.8.0+59`)
 

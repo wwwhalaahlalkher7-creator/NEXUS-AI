@@ -2292,7 +2292,7 @@ class DeviceNetworkService {
       'kind': 'capabilities',
       'value': {
         'platform': Platform.operatingSystem,
-        'app_version': '2.8.0',
+        'app_version': '2.8.1',
         'native_runtime': 'llama.cpp',
         'model_session_concurrency': 1,
         'available_memory_bytes': availableMemory != null && availableMemory > 0
