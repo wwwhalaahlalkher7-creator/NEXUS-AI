@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source contracts for local privacy export and selective deletion."""
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 service = (ROOT / "lib/src/features/privacy/local_data_privacy_service.dart").read_text(encoding="utf-8")
@@ -10,6 +11,25 @@ app = (ROOT / "lib/src/app.dart").read_text(encoding="utf-8")
 test = (ROOT / "test/local_data_export_bundle_test.dart").read_text(encoding="utf-8")
 database = (ROOT / "lib/src/data/local_database.dart").read_text(encoding="utf-8")
 pubspec = (ROOT / "pubspec.yaml").read_text(encoding="utf-8")
+network = (ROOT / "lib/src/features/devices/device_network_service.dart").read_text(encoding="utf-8")
+package_version_match = re.search(r"(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\s*$", pubspec)
+rust_version_match = re.search(r'(?m)^version = "([0-9]+\.[0-9]+\.[0-9]+)"$', (ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+package_version = package_version_match.group(1) if package_version_match else None
+package_build = int(package_version_match.group(2)) if package_version_match else -1
+rust_version = rust_version_match.group(1) if rust_version_match else None
+
+peer_app_version_match = re.search(
+    r"(?m)^\s*'app_version': '([^']+)'",
+    network,
+)
+peer_app_version = peer_app_version_match.group(1) if peer_app_version_match else None
+
+version_checks = {
+    "pubspec semantic version is 2.8.2": package_version == "2.8.2",
+    "pubspec Android build number is 63": package_build == 63,
+    "Cargo workspace/native ABI version remains 2.6.2": rust_version == "2.6.2",
+    "peer app_version metadata matches pubspec": peer_app_version == package_version,
+}
 
 checks = {
     "privacy center is reachable from the app shell": "PrivacyCenterPage()" in app and "الخصوصية والبيانات المحلية" in app,
@@ -56,12 +76,20 @@ checks = {
         item in test for item in ("local_path", "local_device_id", "paired_devices", "secure_storage_secrets_included")
     ),
     "privacy center adds no schema migration": "_databaseVersion = 15" in database and "_createV15BenchmarkRuns(db)" in database,
-    "package version increments without changing native Rust ABI": "version: 2.8.1+61" in pubspec and 'version = "2.6.2"' in (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
+    "package version advances to 2.8.2+63 without changing native Rust ABI": all(version_checks.values()),
 }
 
 failed = [name for name, passed in checks.items() if not passed]
 for name, passed in checks.items():
     print(f"{'PASS' if passed else 'FAIL'} {name}")
+if not all(version_checks.values()):
+    print(
+        "VERSION DIAGNOSTICS: "
+        f"pubspec.version={package_version!r}; "
+        f"pubspec.build={package_build!r}; "
+        f"Cargo.toml.workspace.package.version={rust_version!r}; "
+        f"device_network_service.app_version={peer_app_version!r}"
+    )
 if failed:
     raise SystemExit("Privacy center contract failures: " + ", ".join(failed))
 print(f"Privacy center contract PASS: {len(checks)} checks")

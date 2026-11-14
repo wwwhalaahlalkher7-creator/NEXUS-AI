@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guards the file_picker / secure-storage dependency compatibility fix."""
 from pathlib import Path
+import re
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,11 @@ dependencies = pubspec["dependencies"]
 knowledge = (ROOT / "lib/src/features/knowledge/knowledge_import_service.dart").read_text(encoding="utf-8")
 models = (ROOT / "lib/src/features/models/model_import_service.dart").read_text(encoding="utf-8")
 integrate = (ROOT / "scripts/integrate_bridge.sh").read_text(encoding="utf-8")
+rust_manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+peer_network = (ROOT / "lib/src/features/devices/device_network_service.dart").read_text(encoding="utf-8")
+app_semantic_version = str(pubspec["version"]).split("+", 1)[0]
+rust_version_match = re.search(r'(?m)^version = "([0-9]+\.[0-9]+\.[0-9]+)"$', rust_manifest)
+rust_version = rust_version_match.group(1) if rust_version_match else None
 
 integration_lines = integrate.splitlines()
 integration_index = integration_lines.index(
@@ -26,7 +32,11 @@ checks = {
     "GGUF import consumes one PlatformFile directly": "selected.path" in models and "selected.files" not in models,
     "FRB integration script uses valid shell continuations": integration_lines[integration_index].endswith("\\") and integration_lines[integration_index + 1].endswith("\\"),
     "SelectableText content expression closes only its value group before named arguments": ": content),\n                textDirection: Directionality.of(context)," in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8") and ": content)),\n                textDirection: Directionality.of(context)," not in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8"),
-    "Flutter package version is 2.8.1+61 while Rust ABI remains 2.6.2": pubspec["version"] == "2.8.1+61" and "version = \"2.6.2\"" in (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
+    "peer app version matches Flutter package while Rust ABI remains 2.6.2": (
+        app_semantic_version == "2.8.2"
+        and f"'app_version': '{app_semantic_version}'" in peer_network
+        and rust_version == "2.6.2"
+    ),
     "peer IPv4 parsing rejects non-canonical and out-of-range octets": "part.length > 1 && part.startsWith('0')" in (ROOT / "lib/src/features/devices/peer_protocol.dart").read_text(encoding="utf-8") and "value > 255" in (ROOT / "lib/src/features/devices/peer_protocol.dart").read_text(encoding="utf-8"),
     "pairing invitation expiry is normalized to UTC": "DateTime.fromMillisecondsSinceEpoch(expiresAt, isUtc: true)" in (ROOT / "lib/src/features/devices/peer_discovery.dart").read_text(encoding="utf-8"),
     "empty conversation remains scrollable in short layouts": "SingleChildScrollView" in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8") and "BoxConstraints(minHeight: constraints.maxHeight)" in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8"),
@@ -43,7 +53,7 @@ checks.update({
     "approved peer proposals can be remapped to local agent IDs": "class RemoteTaskPlanRemapper" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "localAgentByRemoteId" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8"),
     "peer proposal import commits task and source reference inside one transaction": "importIncomingAsLocalTask" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "db.transaction((txn) async" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "imported_task_id" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8"),
     "device UI requires explicit local agent mapping before import": "_chooseLocalAgentMappings" in (ROOT / "lib/src/features/devices/devices_page.dart").read_text(encoding="utf-8") and "تأكيد التعيين والاستيراد" in (ROOT / "lib/src/features/devices/devices_page.dart").read_text(encoding="utf-8"),
-    "peer capability snapshot reports the Alpha 2.8.1 app version": "'app_version': '2.8.1'" in (ROOT / "lib/src/features/devices/device_network_service.dart").read_text(encoding="utf-8"),
+    "peer capability snapshot reports the current Alpha 2.8.2 app version": f"'app_version': '{app_semantic_version}'" in peer_network,
 })
 
 failed = [name for name, passed in checks.items() if not passed]

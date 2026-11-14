@@ -1,6 +1,12 @@
-# NEXUS AI — Alpha 2.8.1: Flutter verification repair
+# NEXUS AI — Alpha 2.8.2: verification contract repair
 
-## Alpha 2.8.1 — Verification repair (`2.8.1+61`)
+## Alpha 2.8.2 — Verification contract repair (`2.8.2+63`)
+
+This corrective build synchronizes the Flutter package version, peer capability app-version metadata, and source-contract tests. The CI failure was caused by tests still expecting `2.8.1+61` after the package had already advanced to `2.8.2+62`. The new build is `2.8.2+63`; peer capability metadata advertises `2.8.2`, while the Rust workspace/native C ABI remains `2.6.2`. No native ABI or SQLite schema change is intended. Flutter/Dart CI, Rust checks, Android ARM64 compilation, and physical-device acceptance remain required.
+
+---
+
+## Previous maintenance release — Alpha 2.8.1 (`2.8.1+61`)
 
 This maintenance release fixes the BigInt ceiling-division type mismatch in model-fit estimation and makes the native runtime status card scrollable on short screens. The Flutter package metadata advances to `2.8.1+61`; the Rust workspace and native C ABI remain at `2.6.2`. The local privacy center and its SQLite v15 schema are carried forward unchanged. Flutter/Dart CI, Rust checks, Android ARM64 compilation, and physical-device acceptance remain required. The follow-up CI repair adds explicit blocks to single-statement conditionals in the device network service and fixes the KV-cache confirmation widget test to match the complete dialog copy; the Flutter build number is now `+61`.
 
@@ -479,3 +485,7 @@ See `docs/development/ALPHA_2_7_6_EXPLAINABLE_PLACEMENT.md`.
 3. **Release APK:** build and sign the `arm64-v8a` Release APK (not AAB), verify signing certificate/package/version/native libraries and upgrade path, then publish APK, SHA-256, release notes, and installation/recovery guidance.
 
 Historical scope note for Alpha 2.7.0: resource telemetry, model fit, adaptive inference, memory lifecycle, benchmarks, and explainable placement were split into follow-on milestones. Alpha 2.7.1–2.7.6 are implemented in source; CI and physical-device acceptance remain pending.
+
+## CI checkout consistency note
+
+The privacy version contract now prints each source value separately when the check fails (`pubspec` semantic version/build, Cargo workspace ABI version, and peer `app_version`). This makes stale or partially replaced repository contents visible in the Actions log. When applying this archive, replace the repository-root files and directories with the archive contents; do not place the extracted project inside an additional nested folder.
