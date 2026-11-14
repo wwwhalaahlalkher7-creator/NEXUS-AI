@@ -1,8 +1,8 @@
-# NEXUS AI — Alpha 2.8.1: Verification repair
+# NEXUS AI — Alpha 2.8.1: Flutter verification repair
 
-## Alpha 2.8.1 — Verification repair (`2.8.1+60`)
+## Alpha 2.8.1 — Verification repair (`2.8.1+61`)
 
-This maintenance release fixes the BigInt ceiling-division type mismatch in model-fit estimation and makes the native runtime status card scrollable on short screens. The Flutter package metadata advances to `2.8.1+60`; the Rust workspace and native C ABI remain at `2.6.2`. The local privacy center and its SQLite v15 schema are carried forward unchanged. Flutter/Dart CI, Rust checks, Android ARM64 compilation, and physical-device acceptance remain required.
+This maintenance release fixes the BigInt ceiling-division type mismatch in model-fit estimation and makes the native runtime status card scrollable on short screens. The Flutter package metadata advances to `2.8.1+61`; the Rust workspace and native C ABI remain at `2.6.2`. The local privacy center and its SQLite v15 schema are carried forward unchanged. Flutter/Dart CI, Rust checks, Android ARM64 compilation, and physical-device acceptance remain required. The follow-up CI repair adds explicit blocks to single-statement conditionals in the device network service and fixes the KV-cache confirmation widget test to match the complete dialog copy; the Flutter build number is now `+61`.
 
 ---
 

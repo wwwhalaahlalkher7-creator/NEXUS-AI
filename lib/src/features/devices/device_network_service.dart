@@ -295,7 +295,9 @@ class DeviceNetworkService {
     final steps = await _taskRepository.steps(taskId);
     AgentTaskStepRecord? selected;
     for (final step in steps) {
-      if (step.stepKey == stepKey) selected = step;
+      if (step.stepKey == stepKey) {
+        selected = step;
+      }
     }
     if (selected == null ||
         !{'pending', 'interrupted'}.contains(selected.status.name)) {
@@ -388,10 +390,14 @@ class DeviceNetworkService {
     final db = await _database.database;
     final existingId = await _readSetting(db, _identityKey);
     final id = existingId ?? _randomToken(18);
-    if (existingId == null) await _writeSetting(db, _identityKey, id);
+    if (existingId == null) {
+      await _writeSetting(db, _identityKey, id);
+    }
     final existingName = await _readSetting(db, _nameKey);
     final name = existingName ?? 'NEXUS-${id.substring(0, 6).toUpperCase()}';
-    if (existingName == null) await _writeSetting(db, _nameKey, name);
+    if (existingName == null) {
+      await _writeSetting(db, _nameKey, name);
+    }
     _localDeviceId = id;
     _localDeviceName = name;
     return id;
@@ -478,8 +484,12 @@ class DeviceNetworkService {
   Future<void> startListening() async {
     await initialize();
     await _stoppingListener;
-    if (_server != null) return;
-    if (_disposed) throw StateError('DeviceNetworkService disposed');
+    if (_server != null) {
+      return;
+    }
+    if (_disposed) {
+      throw StateError('DeviceNetworkService disposed');
+    }
     final server = await ServerSocket.bind(
       InternetAddress.anyIPv4,
       port,
@@ -504,7 +514,9 @@ class DeviceNetworkService {
 
   Future<void> stopListening() {
     final activeStop = _stoppingListener;
-    if (activeStop != null) return activeStop;
+    if (activeStop != null) {
+      return activeStop;
+    }
     late final Future<void> trackedStop;
     trackedStop = _performStopListening().whenComplete(() {
       if (identical(_stoppingListener, trackedStop)) {
@@ -585,7 +597,9 @@ class DeviceNetworkService {
         lastError = error;
       }
     }
-    if (lastError != null) throw lastError;
+    if (lastError != null) {
+      throw lastError;
+    }
     throw const PeerProtocolException('لا يوجد عنوان اتصال صالح في الدعوة.');
   }
 
@@ -1103,7 +1117,9 @@ class DeviceNetworkService {
       _flushQueuedTaskTransfers(deviceId);
 
   Future<void> _flushQueuedTaskTransfers(String deviceId) async {
-    if (_disposed || !_sessions.containsKey(deviceId)) return;
+    if (_disposed || !_sessions.containsKey(deviceId)) {
+      return;
+    }
     final device = await repository.get(deviceId);
     if (device == null ||
         device.isBlocked ||
@@ -1115,7 +1131,9 @@ class DeviceNetworkService {
     for (final transfer in queued.where(
       (item) => item.deviceId == deviceId && item.status == 'queued',
     )) {
-      if (!_sessions.containsKey(deviceId)) return;
+      if (!_sessions.containsKey(deviceId)) {
+        return;
+      }
       try {
         await _deliverTaskProposal(deviceId, transfer.transferId);
       } on Object {
@@ -1127,7 +1145,9 @@ class DeviceNetworkService {
 
   Future<void> _deliverTaskProposal(String deviceId, String transferId) async {
     final session = _sessions[deviceId];
-    if (session == null || !_taskTransfersInFlight.add(transferId)) return;
+    if (session == null || !_taskTransfersInFlight.add(transferId)) {
+      return;
+    }
     final record = await _transferRepository.get(transferId);
     if (record == null || record.direction != 'outgoing') {
       _taskTransfersInFlight.remove(transferId);
@@ -1343,7 +1363,9 @@ class DeviceNetworkService {
             : 'تعذر التحقق من مقترح المهمة أو حفظه مؤقتاً؛ يمكن إعادة المحاولة.',
       });
     } finally {
-      if (promptClaimed) _pendingIncomingTaskPrompts.remove(session.deviceId);
+      if (promptClaimed) {
+        _pendingIncomingTaskPrompts.remove(session.deviceId);
+      }
     }
   }
 
@@ -1355,7 +1377,9 @@ class DeviceNetworkService {
   }) {
     _pendingConnections.remove(connection);
     final previous = _sessions.remove(deviceId);
-    if (previous != null) unawaited(previous.connection.close());
+    if (previous != null) {
+      unawaited(previous.connection.close());
+    }
     final session = _PeerSession(
       deviceId: deviceId,
       displayName: displayName,
@@ -1479,7 +1503,9 @@ class DeviceNetworkService {
 
   Future<void> _flushQueuedPeerExecutions(String deviceId) async {
     if (_disposed || !_sessions.containsKey(deviceId) ||
-        !_peerExecutionsInFlight.add('flush:$deviceId')) return;
+        !_peerExecutionsInFlight.add('flush:$deviceId')) {
+      return;
+    }
     try {
       final device = await repository.get(deviceId);
       if (device == null || device.isBlocked ||
@@ -1495,7 +1521,9 @@ class DeviceNetworkService {
         (item) => item.status == PeerTaskExecutionStatus.queued ||
             item.status == PeerTaskExecutionStatus.awaitingApproval,
       )) {
-        if (!_sessions.containsKey(deviceId)) return;
+        if (!_sessions.containsKey(deviceId)) {
+          return;
+        }
         try {
           await _deliverPeerExecution(deviceId, record.executionId);
         } on Object catch (error) {
@@ -1514,12 +1542,16 @@ class DeviceNetworkService {
 
   Future<void> _deliverPeerExecution(String deviceId, String executionId) async {
     final session = _sessions[deviceId];
-    if (session == null || !_peerExecutionsInFlight.add(executionId)) return;
+    if (session == null || !_peerExecutionsInFlight.add(executionId)) {
+      return;
+    }
     try {
       final record = await _executionRepository.get(executionId);
       if (record == null || record.direction != 'outgoing' ||
           (record.status != PeerTaskExecutionStatus.queued &&
-              record.status != PeerTaskExecutionStatus.awaitingApproval)) return;
+              record.status != PeerTaskExecutionStatus.awaitingApproval)) {
+        return;
+      }
       late final PeerTaskExecutionRequest request;
       try {
         request = await PeerTaskExecutionRequest.fromMessage(
@@ -1603,7 +1635,9 @@ class DeviceNetworkService {
         ));
       }
       var record = await _executionRepository.get(request.executionId);
-      if (record == null) throw const PeerTaskExecutionException('تعذر حفظ طلب التنفيذ.');
+      if (record == null) {
+        throw const PeerTaskExecutionException('تعذر حفظ طلب التنفيذ.');
+      }
       if (!inserted) {
         if (record.status == PeerTaskExecutionStatus.rejected ||
             record.status == PeerTaskExecutionStatus.interrupted ||
@@ -1885,7 +1919,9 @@ class DeviceNetworkService {
     String? status,
     required String message,
   }) async {
-    if (!identical(_sessions[session.deviceId], session)) return;
+    if (!identical(_sessions[session.deviceId], session)) {
+      return;
+    }
     try {
       await _sendExecutionAck(
         session,
@@ -1904,7 +1940,9 @@ class DeviceNetworkService {
     _PeerSession session,
     PeerTaskExecutionResult result,
   ) async {
-    if (!identical(_sessions[session.deviceId], session)) return;
+    if (!identical(_sessions[session.deviceId], session)) {
+      return;
+    }
     try {
       await session.channel.send(result.toMessage());
     } on Object catch (error) {
@@ -1938,12 +1976,16 @@ class DeviceNetworkService {
     Map<String, Object?> message,
   ) async {
     final executionId = message['execution_id'];
-    if (message['version'] != peerTaskExecutionVersion || executionId is! String) return;
+    if (message['version'] != peerTaskExecutionVersion || executionId is! String) {
+      return;
+    }
     final record = await _executionRepository.get(executionId);
     if (record == null || record.direction != 'outgoing' ||
         record.deviceId != session.deviceId ||
         (record.status != PeerTaskExecutionStatus.awaitingApproval &&
-            record.status != PeerTaskExecutionStatus.queued)) return;
+            record.status != PeerTaskExecutionStatus.queued)) {
+      return;
+    }
     var status = record.status;
     if (message['accepted'] == true) {
       if (status == PeerTaskExecutionStatus.queued) {
@@ -2046,13 +2088,19 @@ class DeviceNetworkService {
     PeerTaskExecutionResult result,
   ) async {
     final task = await _taskRepository.get(record.sourceTaskId);
-    if (task == null) return;
+    if (task == null) {
+      return;
+    }
     final steps = await _taskRepository.steps(record.sourceTaskId);
     AgentTaskStepRecord? step;
     for (final item in steps) {
-      if (item.stepKey == record.sourceStepKey) step = item;
+      if (item.stepKey == record.sourceStepKey) {
+        step = item;
+      }
     }
-    if (step == null) return;
+    if (step == null) {
+      return;
+    }
     final nextStatus = switch (result.outcome) {
       'succeeded' => AgentTaskStepStatus.succeeded,
       'cancelled' => AgentTaskStepStatus.interrupted,
@@ -2102,10 +2150,14 @@ class DeviceNetworkService {
   Future<void> _reconcileStoredRemoteResults() async {
     final records = await _executionRepository.list(direction: 'outgoing');
     for (final record in records) {
-      if (record.resultJson == null) continue;
+      if (record.resultJson == null) {
+        continue;
+      }
       try {
         final decoded = jsonDecode(record.resultJson!);
-        if (decoded is! Map) continue;
+        if (decoded is! Map) {
+          continue;
+        }
         final result = await PeerTaskExecutionResult.fromMessage(
           decoded.cast<String, Object?>(),
         );
@@ -2177,7 +2229,9 @@ class DeviceNetworkService {
     }
     final record = await _executionRepository.get(executionId);
     if (record == null || record.direction != 'incoming' ||
-        record.deviceId != session.deviceId) return;
+        record.deviceId != session.deviceId) {
+      return;
+    }
     if (record.status == PeerTaskExecutionStatus.awaitingApproval) {
       _cancelledIncomingExecutions.add(executionId);
       await _executionRepository.transition(
@@ -2209,10 +2263,14 @@ class DeviceNetworkService {
     Map<String, Object?> message,
   ) async {
     final executionId = message['execution_id'];
-    if (executionId is! String || message['version'] != peerTaskExecutionVersion) return;
+    if (executionId is! String || message['version'] != peerTaskExecutionVersion) {
+      return;
+    }
     final record = await _executionRepository.get(executionId);
     if (record == null || record.direction != 'outgoing' ||
-        record.deviceId != session.deviceId || message['accepted'] != true) return;
+        record.deviceId != session.deviceId || message['accepted'] != true) {
+      return;
+    }
     if (record.status == PeerTaskExecutionStatus.awaitingApproval) {
       await _executionRepository.transition(
         executionId: executionId,
@@ -2246,13 +2304,17 @@ class DeviceNetworkService {
   }
 
   Future<void> _flushPeerExecutionResults(String deviceId) async {
-    if (_disposed || !_sessions.containsKey(deviceId)) return;
+    if (_disposed || !_sessions.containsKey(deviceId)) {
+      return;
+    }
     final records = await _executionRepository.list(
       direction: 'incoming',
       deviceId: deviceId,
     );
     final session = _sessions[deviceId];
-    if (session == null) return;
+    if (session == null) {
+      return;
+    }
     for (final record in records) {
       if (record.resultJson == null ||
           record.resultAcknowledgedAtUnixMs != null ||
@@ -2265,7 +2327,9 @@ class DeviceNetworkService {
       }
       try {
         final decoded = jsonDecode(record.resultJson!);
-        if (decoded is! Map) continue;
+        if (decoded is! Map) {
+          continue;
+        }
         await session.channel.send(decoded.cast<String, Object?>());
       } on Object {
         return;
@@ -2281,7 +2345,9 @@ class DeviceNetworkService {
 
   Future<void> _sendCapabilities(String deviceId) async {
     final session = _sessions[deviceId];
-    if (session == null) return;
+    if (session == null) {
+      return;
+    }
     final snapshot = await _readResourceSnapshotForCapabilities();
     final now = DateTime.now().millisecondsSinceEpoch;
     final activePeerExecutions = _pendingIncomingExecutionDevices.length;
@@ -2333,12 +2399,16 @@ class DeviceNetworkService {
         .map((agent) => agent.modelId)
         .whereType<String>()
         .toSet();
-    if (readyModelIds.isEmpty) return const [];
+    if (readyModelIds.isEmpty) {
+      return const [];
+    }
 
     final models = await _modelRepository.list();
     final signatures = <String>{};
     for (final model in models) {
-      if (!readyModelIds.contains(model.id)) continue;
+      if (!readyModelIds.contains(model.id)) {
+        continue;
+      }
       final profile = PeerInstalledModelProfile.fromModel(model);
       if (profile == null || model.localPath == null || model.localPath!.isEmpty) {
         continue;
@@ -2362,7 +2432,9 @@ class DeviceNetworkService {
       return _cachedResourceSnapshot;
     }
     final pending = _resourceSnapshotPending;
-    if (pending != null) return pending;
+    if (pending != null) {
+      return pending;
+    }
     final future = _resourceMonitor.readSnapshot(includeExtendedTelemetry: true);
     _resourceSnapshotPending = future;
     try {
@@ -2379,7 +2451,9 @@ class DeviceNetworkService {
 
   Future<void> ping(String deviceId) async {
     final session = _sessions[deviceId];
-    if (session == null) throw const PeerProtocolException('الجهاز غير متصل.');
+    if (session == null) {
+      throw const PeerProtocolException('الجهاز غير متصل.');
+    }
     await _sendCapabilities(deviceId);
     await session.channel.send({
       'kind': 'ping',
@@ -2394,7 +2468,9 @@ class DeviceNetworkService {
   Future<void> setBlocked(String deviceId, bool blocked) async {
     if (blocked) {
       final session = _sessions.remove(deviceId);
-      if (session != null) await session.connection.close();
+      if (session != null) {
+        await session.connection.close();
+      }
     }
     await repository.setBlocked(deviceId, blocked);
     _events.add(DeviceNetworkEvent(
@@ -2406,7 +2482,9 @@ class DeviceNetworkService {
 
   Future<void> forget(String deviceId) async {
     final session = _sessions.remove(deviceId);
-    if (session != null) await session.connection.close();
+    if (session != null) {
+      await session.connection.close();
+    }
     await _secureStorage.delete(key: '$_secretPrefix$deviceId');
     await repository.remove(deviceId);
     _events.add(DeviceNetworkEvent(
@@ -2418,7 +2496,9 @@ class DeviceNetworkService {
 
   Future<void> startDiscovery({Duration duration = _discoveryWindow}) async {
     await initialize();
-    if (_disposed) throw StateError('DeviceNetworkService disposed');
+    if (_disposed) {
+      throw StateError('DeviceNetworkService disposed');
+    }
     if (duration <= Duration.zero) {
       throw ArgumentError.value(duration, 'duration', 'Must be positive');
     }
@@ -2479,7 +2559,9 @@ class DeviceNetworkService {
       return null;
     }
     final addresses = await _localPrivateAddresses();
-    if (addresses.isEmpty) return null;
+    if (addresses.isEmpty) {
+      return null;
+    }
     return PairingInvite(
       addresses: addresses,
       port: port,
@@ -2492,7 +2574,9 @@ class DeviceNetworkService {
   }
 
   Future<void> _ensureDiscoverySocket() async {
-    if (_discoverySocket != null) return;
+    if (_discoverySocket != null) {
+      return;
+    }
     final opening = _discoverySocketOpening;
     if (opening != null) {
       await opening;
@@ -2527,7 +2611,9 @@ class DeviceNetworkService {
           Datagram? datagram;
           do {
             datagram = socket.receive();
-            if (datagram != null) _handleDiscoveryDatagram(datagram);
+            if (datagram != null) {
+              _handleDiscoveryDatagram(datagram);
+            }
           } while (datagram != null);
         } else if (event == RawSocketEvent.closed &&
             identical(_discoverySocket, socket)) {
@@ -2575,10 +2661,14 @@ class DeviceNetworkService {
     }
     try {
       final decoded = jsonDecode(utf8.decode(datagram.data));
-      if (decoded is! Map) return;
+      if (decoded is! Map) {
+        return;
+      }
       final message = <String, Object?>{};
       decoded.forEach((key, value) {
-        if (key is String) message[key] = value;
+        if (key is String) {
+          message[key] = value;
+        }
       });
       if (message['type'] == 'nexus_probe' &&
           message['version'] == peerDiscoveryVersion) {
@@ -2657,13 +2747,17 @@ class DeviceNetworkService {
 
   Future<void> _sendDiscoveryProbe() async {
     final socket = _discoverySocket;
-    if (!_isDiscovering || socket == null) return;
+    if (!_isDiscovering || socket == null) {
+      return;
+    }
     final now = DateTime.now();
     _validDiscoveryNonces.removeWhere((_, expiry) => !expiry.isAfter(now));
     final nonce = _randomToken(12);
     _validDiscoveryNonces[nonce] = now.add(_nonceLifetime);
     final bytes = utf8.encode(jsonEncode(PeerDiscoveryProtocol.createProbe(nonce)));
-    if (bytes.length > peerDiscoveryPacketLimit) return;
+    if (bytes.length > peerDiscoveryPacketLimit) {
+      return;
+    }
     try {
       socket.send(bytes, InternetAddress('255.255.255.255'), discoveryPort);
     } on Object catch (error) {
@@ -2693,7 +2787,9 @@ class DeviceNetworkService {
   }
 
   void _startNetworkWatcher() {
-    if (_networkWatchTimer != null || _disposed) return;
+    if (_networkWatchTimer != null || _disposed) {
+      return;
+    }
     unawaited(_refreshNetworkFingerprint(emitChange: false));
     _networkWatchTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       unawaited(_refreshNetworkFingerprint());
@@ -2739,7 +2835,9 @@ class DeviceNetworkService {
         if (_isDiscovering || _isDiscoverableInvite(_activeInvite)) {
           try {
             await _ensureDiscoverySocket();
-            if (_isDiscovering) await _sendDiscoveryProbe();
+            if (_isDiscovering) {
+              await _sendDiscoveryProbe();
+            }
           } on Object catch (error) {
             _events.add(DeviceNetworkEvent(
               type: DeviceNetworkEventType.error,
@@ -2776,7 +2874,9 @@ class DeviceNetworkService {
     result.sort((left, right) {
       final leftLinkLocal = left.startsWith('169.254.');
       final rightLinkLocal = right.startsWith('169.254.');
-      if (leftLinkLocal != rightLinkLocal) return leftLinkLocal ? 1 : -1;
+      if (leftLinkLocal != rightLinkLocal) {
+        return leftLinkLocal ? 1 : -1;
+      }
       return left.compareTo(right);
     });
     // The versioned QR envelope accepts at most eight IPv4 endpoints.
@@ -2786,7 +2886,9 @@ class DeviceNetworkService {
   List<int> _decodePairingCode(String value) {
     try {
       final decoded = base64Url.decode(base64Url.normalize(value.trim()));
-      if (decoded.length != 32) throw const FormatException();
+      if (decoded.length != 32) {
+        throw const FormatException();
+      }
       return decoded;
     } on FormatException {
       throw const PeerProtocolException(
@@ -2827,7 +2929,9 @@ class DeviceNetworkService {
       base64UrlEncode(_randomBytes(length)).replaceAll('=', '');
 
   Future<void> dispose() async {
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
     _disposed = true;
     _networkWatchTimer?.cancel();
     _networkWatchTimer = null;

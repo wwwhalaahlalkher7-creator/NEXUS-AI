@@ -56,7 +56,7 @@ checks = {
         item in test for item in ("local_path", "local_device_id", "paired_devices", "secure_storage_secrets_included")
     ),
     "privacy center adds no schema migration": "_databaseVersion = 15" in database and "_createV15BenchmarkRuns(db)" in database,
-    "package version increments without changing native Rust ABI": "version: 2.8.1+60" in pubspec and 'version = "2.6.2"' in (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
+    "package version increments without changing native Rust ABI": "version: 2.8.1+61" in pubspec and 'version = "2.6.2"' in (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
 }
 
 failed = [name for name, passed in checks.items() if not passed]

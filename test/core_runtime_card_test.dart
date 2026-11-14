@@ -135,7 +135,7 @@ void main() {
     );
     await tester.tap(find.text('تفريغ KV Cache المؤقت'));
     await tester.pumpAndSettle();
-    expect(find.text('ستظل أوزان النموذج وسياق التشغيل محمّلين، وقد يُعاد بناء KV عند الطلب التالي. هل تريد المتابعة؟'), findsOneWidget);
+    expect(find.text('سيتم مسح حالة KV المؤقتة فقط. ستظل أوزان النموذج وسياق التشغيل محمّلين، وقد يُعاد بناء KV عند الطلب التالي. هل تريد المتابعة؟'), findsOneWidget);
     await tester.tap(find.text('تفريغ KV Cache').last);
     await tester.pumpAndSettle();
 
