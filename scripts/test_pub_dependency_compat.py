@@ -25,7 +25,8 @@ checks = {
     "GGUF import uses the v12 static picker": "FilePicker.pickFile(" in models and "FilePicker.platform" not in models,
     "GGUF import consumes one PlatformFile directly": "selected.path" in models and "selected.files" not in models,
     "FRB integration script uses valid shell continuations": integration_lines[integration_index].endswith("\\") and integration_lines[integration_index + 1].endswith("\\"),
-    "Flutter build version has advanced without changing Rust ABI crate version": pubspec["version"] == "2.6.2+44",
+    "SelectableText content expression closes only its value group before named arguments": ": content),\n                textDirection: Directionality.of(context)," in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8") and ": content)),\n                textDirection: Directionality.of(context)," not in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8"),
+    "Flutter build version has advanced without changing Rust ABI crate version": pubspec["version"] == "2.6.2+45",
 }
 
 failed = [name for name, passed in checks.items() if not passed]

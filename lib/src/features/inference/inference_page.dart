@@ -1886,7 +1886,7 @@ class _MessageBubble extends StatelessWidget {
                         ? 'يطلب الوكيل تنفيذ أداة محلية…'
                         : content.isEmpty && isLive
                             ? 'جارٍ تجهيز الاستجابة…'
-                            : content)),
+                            : content),
                 textDirection: Directionality.of(context),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: foreground,

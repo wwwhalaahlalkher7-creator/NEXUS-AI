@@ -1,6 +1,6 @@
 # Alpha 2.6.2 — Pub dependency resolution fix
 
-Build metadata: `2.6.2+44` (Rust workspace remains `2.6.2`; no native ABI change).
+Build metadata: `2.6.2+45` (Rust workspace remains `2.6.2`; no native ABI change).
 
 ## Root cause
 
@@ -22,3 +22,8 @@ The FRB `integrate` command invokes `flutter pub add rust_lib_nexus_app --path=r
 ## Verification
 
 The source-level regression guard and existing Python contract/migration tests are run locally. Flutter/Dart package resolution and the real FRB integration command must still be confirmed by GitHub Actions; this environment does not include Flutter or Dart.
+
+
+## Follow-up: Dart formatter parse failure
+
+The first CI run after the dependency fix reached FRB's Dart formatting step but exposed an extra closing parenthesis in the inference message bubble's `SelectableText` data expression. The extra parenthesis prematurely closed the constructor before its `textDirection` and `style` named arguments. Alpha `2.6.2+45` removes that single extra parenthesis and adds a source-contract regression assertion. This follow-up changes Flutter source/build metadata only; the Rust ABI crate remains `2.6.2`.

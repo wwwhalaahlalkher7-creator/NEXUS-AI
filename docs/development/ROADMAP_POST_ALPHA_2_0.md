@@ -184,3 +184,8 @@ Still required: Flutter/Dart/Rust CI, Android ARM64 build, physical two-device t
 ## Optional later work
 
 Vision, speech input/output, additional Android ABIs, desktop platforms, GPU acceleration, and cloud synchronization remain separate later milestones. They must not delay the reliable offline CPU-first path.
+
+
+### Alpha 2.6.2+45 — Inference widget syntax correction
+
+Follow-up CI repair for the `SelectableText` constructor in `inference_page.dart`: remove the extra closing parenthesis before `textDirection`, and guard the exact malformed pattern with `scripts/test_pub_dependency_compat.py`. The Flutter package build metadata is `2.6.2+45`; Rust remains `2.6.2`. Dart formatting, analysis, tests, FRB integration, and APK build still require a clean GitHub Actions run.
