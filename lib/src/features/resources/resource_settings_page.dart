@@ -89,32 +89,45 @@ class _ResourceSettingsPageState extends State<ResourceSettingsPage> {
                       ),
                 ),
                 const SizedBox(height: 16),
-                for (final mode in ResourceMode.values)
-                  Card(
-                    clipBehavior: Clip.antiAlias,
-                    child: RadioListTile<ResourceMode>(
-                      value: mode,
-                      groupValue: _selectedMode,
-                      onChanged: _saving
-                          ? null
-                          : (value) {
-                              if (value != null) _select(value);
-                            },
-                      title: Text(
-                        ResourceSettings(mode: mode).label,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(ResourceSettings(mode: mode).description),
-                      ),
-                      secondary: Icon(switch (mode) {
-                        ResourceMode.balanced => Icons.balance_rounded,
-                        ResourceMode.performance => Icons.speed_rounded,
-                        ResourceMode.unrestricted => Icons.all_inclusive_rounded,
-                      }),
-                    ),
+                RadioGroup<ResourceMode>(
+                  groupValue: _selectedMode,
+                  onChanged: _saving
+                      ? null
+                      : (value) {
+                          if (value != null) {
+                            _select(value);
+                          }
+                        },
+                  child: Column(
+                    children: [
+                      for (final mode in ResourceMode.values)
+                        Card(
+                          clipBehavior: Clip.antiAlias,
+                          child: RadioListTile<ResourceMode>(
+                            value: mode,
+                            title: Text(
+                              ResourceSettings(mode: mode).label,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                ResourceSettings(mode: mode).description,
+                              ),
+                            ),
+                            secondary: Icon(switch (mode) {
+                              ResourceMode.balanced => Icons.balance_rounded,
+                              ResourceMode.performance => Icons.speed_rounded,
+                              ResourceMode.unrestricted =>
+                                Icons.all_inclusive_rounded,
+                            }),
+                          ),
+                        ),
+                    ],
                   ),
+                ),
                 if (_saving) ...[
                   const SizedBox(height: 8),
                   const LinearProgressIndicator(),

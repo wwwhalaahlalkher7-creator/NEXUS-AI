@@ -189,3 +189,8 @@ Vision, speech input/output, additional Android ABIs, desktop platforms, GPU acc
 ### Alpha 2.6.2+45 — Inference widget syntax correction
 
 Follow-up CI repair for the `SelectableText` constructor in `inference_page.dart`: remove the extra closing parenthesis before `textDirection`, and guard the exact malformed pattern with `scripts/test_pub_dependency_compat.py`. The Flutter package build metadata is `2.6.2+45`; Rust remains `2.6.2`. Dart formatting, analysis, tests, FRB integration, and APK build still require a clean GitHub Actions run.
+
+
+### Alpha 2.6.2+46 — Flutter verification follow-up
+
+Fix the latest GitHub test failures: deterministic strict private IPv4 parsing, UTC normalization for QR expiry timestamps, and a scrollable short-height inference empty state. Remove Flutter analyzer infos by using `RadioGroup<ResourceMode>` and explicit blocks in device page flow-control statements. Flutter analyze/test and APK build remain pending a new CI run.

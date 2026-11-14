@@ -43,6 +43,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
 
       expect(find.text('ابدأ محادثة محلية'), findsOneWidget);
       expect(

@@ -1759,42 +1759,49 @@ class _EmptyConversation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 68,
-              height: 68,
-              decoration: BoxDecoration(
-                color: colors.primaryContainer,
-                borderRadius: BorderRadius.circular(22),
-              ),
-              child: Icon(
-                Icons.auto_awesome_rounded,
-                size: 32,
-                color: colors.primary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'ابدأ محادثة محلية',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 68,
+                    height: 68,
+                    decoration: BoxDecoration(
+                      color: colors.primaryContainer,
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    child: Icon(
+                      Icons.auto_awesome_rounded,
+                      size: 32,
+                      color: colors.primary,
+                    ),
                   ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'رسائلك واستجابات النموذج تحفظ محلياً على جهازك، ولا تُرسل إلى خادم خارجي.',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: colors.onSurfaceVariant,
-                    height: 1.5,
+                  const SizedBox(height: 16),
+                  Text(
+                    'ابدأ محادثة محلية',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'رسائلك واستجابات النموذج تحفظ محلياً على جهازك، ولا تُرسل إلى خادم خارجي.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: colors.onSurfaceVariant,
+                          height: 1.5,
+                        ),
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -246,14 +246,28 @@ bool constantTimeEquals(List<int> left, List<int> right) {
 }
 
 bool isPrivatePeerAddress(String address) {
-  final parsed = InternetAddress.tryParse(address);
-  if (parsed == null || parsed.type != InternetAddressType.IPv4) return false;
-  final parts = parsed.rawAddress;
+  // Parse strict dotted-decimal IPv4 directly. InternetAddress.tryParse may
+  // normalize address forms differently across host platforms, while pairing
+  // payloads and LAN advertisements must accept only canonical IPv4 literals.
+  final parts = address.split('.');
   if (parts.length != 4) return false;
-  final a = parts[0];
-  final b = parts[1];
-  if (a == 10 || a == 127 || a == 0 || a >= 224) return false;
-  if (a == 169 && b == 254) return true;
+  final octets = <int>[];
+  for (final part in parts) {
+    if (part.isEmpty ||
+        !RegExp(r'^\d{1,3}$').hasMatch(part) ||
+        (part.length > 1 && part.startsWith('0'))) {
+      return false;
+    }
+    final value = int.tryParse(part);
+    if (value == null || value > 255) return false;
+    octets.add(value);
+  }
+  final a = octets[0];
+  final b = octets[1];
+  if (a == 0 || a == 127 || a >= 224) return false;
+  // RFC 1918 private networks and IPv4 link-local addresses (169.254/16)
+  // are valid destinations for direct local peer connections.
+  if (a == 10 || (a == 169 && b == 254)) return true;
   if (a == 172 && b >= 16 && b <= 31) return true;
   if (a == 192 && b == 168) return true;
   return false;

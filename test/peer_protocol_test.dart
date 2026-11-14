@@ -155,6 +155,9 @@ void main() {
     expect(isPrivatePeerAddress('169.254.1.9'), isTrue);
     expect(isPrivatePeerAddress('8.8.8.8'), isFalse);
     expect(isPrivatePeerAddress('127.0.0.1'), isFalse);
+    expect(isPrivatePeerAddress('192.168.1.256'), isFalse);
+    expect(isPrivatePeerAddress('192.168.001.10'), isFalse);
+    expect(isPrivatePeerAddress('192.168.1'), isFalse);
     expect(isPrivatePeerAddress('::1'), isFalse);
   });
 }

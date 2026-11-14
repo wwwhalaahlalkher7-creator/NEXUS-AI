@@ -34,6 +34,7 @@ void main() {
       expect(decoded.port, original.port);
       expect(decoded.pairingCode, original.pairingCode);
       expect(decoded.expiresAt, original.expiresAt);
+      expect(decoded.expiresAt.isUtc, isTrue);
     });
 
     test('rejects an expired invitation', () {

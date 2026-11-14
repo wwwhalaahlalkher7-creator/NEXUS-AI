@@ -50,14 +50,20 @@ class _DevicesPageState extends State<DevicesPage> {
       await widget.service.initialize();
       await _reload();
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
   void _handleEvent(DeviceNetworkEvent event) {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _status = event.message;
       if (event.type == DeviceNetworkEventType.error) {
@@ -96,7 +102,9 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 
   Future<bool> _confirmPairing(PeerPairingRequest request) async {
-    if (!mounted) return false;
+    if (!mounted) {
+      return false;
+    }
     Timer? approvalExpiry;
     final approved = await showDialog<bool>(
       context: context,
@@ -160,7 +168,9 @@ class _DevicesPageState extends State<DevicesPage> {
   Future<void> _shareTaskProposal(PairedDeviceRecord device) async {
     final tasks = await AgentTaskRepository().list();
     final candidates = tasks.where((task) => task.status.name == 'planned').toList();
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     if (candidates.isEmpty) {
       setState(() => _status = 'لا توجد مهام مخططة جاهزة للإرسال. أنشئ خطة في صفحة تنسيق المهام أولاً.');
       return;
@@ -185,7 +195,9 @@ class _DevicesPageState extends State<DevicesPage> {
         ],
       ),
     );
-    if (selected == null || !mounted) return;
+    if (selected == null || !mounted) {
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -204,16 +216,22 @@ class _DevicesPageState extends State<DevicesPage> {
       }
     } on Object catch (error) {
       await _reload();
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
   Future<bool?> _confirmIncomingTaskProposal(
     PeerTaskProposalRequest request,
   ) async {
-    if (!mounted) return null;
+    if (!mounted) {
+      return null;
+    }
     final decoded = jsonDecode(request.planJson);
     final prettyPlan = const JsonEncoder.withIndent('  ').convert(decoded);
     final planPreview = prettyPlan.length > 12000
@@ -225,7 +243,9 @@ class _DevicesPageState extends State<DevicesPage> {
       barrierDismissible: false,
       builder: (dialogContext) {
         approvalExpiry ??= Timer(const Duration(seconds: 60), () {
-          if (dialogContext.mounted) Navigator.of(dialogContext).pop(null);
+          if (dialogContext.mounted) {
+            Navigator.of(dialogContext).pop(null);
+          }
         });
         return AlertDialog(
           title: const Text('طلب استلام مقترح مهمة'),
@@ -270,7 +290,9 @@ class _DevicesPageState extends State<DevicesPage> {
   Future<void> _viewTaskTransfer(RemoteTaskTransferRecord transfer) async {
     final decoded = jsonDecode(transfer.planJson);
     final prettyPlan = const JsonEncoder.withIndent('  ').convert(decoded);
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -306,7 +328,9 @@ class _DevicesPageState extends State<DevicesPage> {
     });
     try {
       final invite = await widget.service.createInvite();
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _invite = invite;
         _status = invite.discoveryAvailable
@@ -314,9 +338,13 @@ class _DevicesPageState extends State<DevicesPage> {
             : 'الاستقبال يعمل؛ الاكتشاف التلقائي غير متاح حالياً، لكن QR والإدخال اليدوي يعملان.';
       });
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -343,7 +371,9 @@ class _DevicesPageState extends State<DevicesPage> {
         });
       }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = 'تعذر تحديث عناوين الدعوة: $error');
+      if (mounted) {
+        setState(() => _error = 'تعذر تحديث عناوين الدعوة: $error');
+      }
     }
   }
 
@@ -353,7 +383,9 @@ class _DevicesPageState extends State<DevicesPage> {
         builder: (_) => const PairingQrScannerPage(),
       ),
     );
-    if (!mounted || invite == null) return;
+    if (!mounted || invite == null) {
+      return;
+    }
     await _confirmAndConnectInvite(invite);
   }
 
@@ -365,17 +397,25 @@ class _DevicesPageState extends State<DevicesPage> {
         throw const FormatException('لا توجد دعوة منسوخة في الحافظة. انسخ بيانات QR من الجهاز المستضيف أولاً.');
       }
       final invite = PairingInvitePayload.decode(raw);
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       await _confirmAndConnectInvite(invite);
     } on FormatException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted) {
+        setState(() => _error = error.message);
+      }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = 'تعذر قراءة دعوة الحافظة: $error');
+      if (mounted) {
+        setState(() => _error = 'تعذر قراءة دعوة الحافظة: $error');
+      }
     }
   }
 
   Future<void> _confirmAndConnectInvite(PairingInvitePayload invite) async {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     final approved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -409,7 +449,9 @@ class _DevicesPageState extends State<DevicesPage> {
         ],
       ),
     );
-    if (approved != true || !mounted) return;
+    if (approved != true || !mounted) {
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -418,11 +460,17 @@ class _DevicesPageState extends State<DevicesPage> {
     try {
       await widget.service.connectWithInvite(invite);
       await _reload();
-      if (mounted) setState(() => _status = 'تم الاقتران الآمن مع ${invite.displayName}.');
+      if (mounted) {
+        setState(() => _status = 'تم الاقتران الآمن مع ${invite.displayName}.');
+      }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -438,7 +486,9 @@ class _DevicesPageState extends State<DevicesPage> {
     try {
       await widget.service.startDiscovery();
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 
@@ -452,9 +502,13 @@ class _DevicesPageState extends State<DevicesPage> {
       await widget.service.connectToDiscoveredPeer(peer);
       await _reload();
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -479,11 +533,17 @@ class _DevicesPageState extends State<DevicesPage> {
       );
       _codeController.clear();
       await _reload();
-      if (mounted) setState(() => _status = 'تم الاقتران والاتصال بنجاح.');
+      if (mounted) {
+        setState(() => _status = 'تم الاقتران والاتصال بنجاح.');
+      }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -497,18 +557,26 @@ class _DevicesPageState extends State<DevicesPage> {
       await widget.service.connectToPairedDevice(device.id);
       await _reload();
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
   Future<void> _ping(PairedDeviceRecord device) async {
     try {
       await widget.service.ping(device.id);
-      if (mounted) setState(() => _status = 'أُرسل اختبار اتصال إلى ${device.displayName}.');
+      if (mounted) {
+        setState(() => _status = 'أُرسل اختبار اتصال إلى ${device.displayName}.');
+      }
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     }
   }
 
@@ -533,7 +601,9 @@ class _DevicesPageState extends State<DevicesPage> {
           ],
         ),
       );
-      if (confirmed != true) return;
+      if (confirmed != true) {
+        return;
+      }
     }
     await widget.service.setBlocked(device.id, !device.isBlocked);
     await _reload();
@@ -559,14 +629,18 @@ class _DevicesPageState extends State<DevicesPage> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (confirmed != true) {
+      return;
+    }
     await widget.service.forget(device.id);
     await _reload();
   }
 
   Future<void> _copyInvite() async {
     final invite = _invite;
-    if (invite == null) return;
+    if (invite == null) {
+      return;
+    }
     final text = invite.qrPayload;
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
@@ -1020,7 +1094,9 @@ class _DevicesPageState extends State<DevicesPage> {
                               await widget.service.retryQueuedTaskTransfers(transfer.deviceId);
                               await _reload();
                             } on Object catch (error) {
-                              if (mounted) setState(() => _error = error.toString());
+                              if (mounted) {
+                                setState(() => _error = error.toString());
+                              }
                             }
                           },
                           icon: const Icon(Icons.sync_rounded, size: 18),

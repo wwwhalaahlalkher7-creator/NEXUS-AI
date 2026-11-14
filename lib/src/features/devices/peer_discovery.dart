@@ -113,7 +113,7 @@ class PairingInvitePayload {
     if (expiresAt <= nowMilliseconds || expiresAt > latestAllowedExpiry) {
       throw const FormatException('انتهت صلاحية الدعوة أو أن تاريخها غير موثوق.');
     }
-    final expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt);
+    final expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt, isUtc: true);
 
     return PairingInvitePayload(
       deviceId: deviceId,
