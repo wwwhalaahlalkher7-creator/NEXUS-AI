@@ -125,6 +125,14 @@ void main() {
     expect(find.text('256.0 MiB'), findsOneWidget);
     expect(find.text('7'), findsOneWidget);
 
+    await tester.scrollUntilVisible(
+      find.text('تفريغ KV Cache المؤقت'),
+      240,
+      scrollable: find.descendant(
+        of: find.byType(CoreRuntimeCard),
+        matching: find.byType(Scrollable),
+      ).first,
+    );
     await tester.tap(find.text('تفريغ KV Cache المؤقت'));
     await tester.pumpAndSettle();
     expect(find.text('ستظل أوزان النموذج وسياق التشغيل محمّلين، وقد يُعاد بناء KV عند الطلب التالي. هل تريد المتابعة؟'), findsOneWidget);

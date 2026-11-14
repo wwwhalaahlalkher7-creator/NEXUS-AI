@@ -371,7 +371,8 @@ class ModelFitEstimator {
   }
 
   static BigInt _ceilRatio(BigInt value, int numerator, int denominator) =>
-      (value * BigInt.from(numerator) + BigInt.from(denominator - 1)) ~/ denominator;
+      (value * BigInt.from(numerator) + BigInt.from(denominator - 1)) ~/
+      BigInt.from(denominator);
 
   static ModelFitEstimate _unknown(
     ModelRecord model,

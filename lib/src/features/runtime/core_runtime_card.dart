@@ -114,8 +114,9 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
               );
             }
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
@@ -254,7 +255,8 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                     label: const Text('إعادة الفحص'),
                   ),
                 ),
-              ],
+                ],
+              ),
             );
           },
         ),
