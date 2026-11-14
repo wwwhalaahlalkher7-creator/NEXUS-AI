@@ -91,13 +91,11 @@ class _ResourceSettingsPageState extends State<ResourceSettingsPage> {
                 const SizedBox(height: 16),
                 RadioGroup<ResourceMode>(
                   groupValue: _selectedMode,
-                  onChanged: _saving
-                      ? null
-                      : (value) {
-                          if (value != null) {
-                            _select(value);
-                          }
-                        },
+                  onChanged: (value) {
+                    if (!_saving && value != null) {
+                      _select(value);
+                    }
+                  },
                   child: Column(
                     children: [
                       for (final mode in ResourceMode.values)

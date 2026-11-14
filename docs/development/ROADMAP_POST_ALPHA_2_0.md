@@ -194,3 +194,8 @@ Follow-up CI repair for the `SelectableText` constructor in `inference_page.dart
 ### Alpha 2.6.2+46 — Flutter verification follow-up
 
 Fix the latest GitHub test failures: deterministic strict private IPv4 parsing, UTC normalization for QR expiry timestamps, and a scrollable short-height inference empty state. Remove Flutter analyzer infos by using `RadioGroup<ResourceMode>` and explicit blocks in device page flow-control statements. Flutter analyze/test and APK build remain pending a new CI run.
+
+
+### Alpha 2.6.2+47 — RadioGroup callback typing fix
+
+The first host Flutter verification run after `2.6.2+46` found one compile error: the nullable `_saving ? null : callback` expression was passed to `RadioGroup.onChanged`, whose current API requires a non-null `ValueChanged<ResourceMode?>`. The callback is now always provided and returns without changing state while `_saving` is true or the selected value is null. The source-contract test verifies the non-null callback shape. Flutter package metadata is `2.6.2+47`; Rust workspace and native ABI remain `2.6.2`. Re-run GitHub Actions to confirm Dart analysis and all widget tests.
