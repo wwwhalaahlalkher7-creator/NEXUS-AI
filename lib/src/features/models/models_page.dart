@@ -7,8 +7,13 @@ import 'model_record.dart';
 import 'model_repository.dart';
 import 'model_import_service.dart';
 import 'model_file_verifier.dart';
+import 'model_fit_estimator.dart';
+import 'rust_gguf_inspector.dart';
 import '../runtime/model_runtime_manager.dart';
 import '../runtime/rust_model_runtime_backend.dart';
+import '../resources/resource_settings.dart';
+import '../resources/adaptive_inference_policy.dart';
+import '../benchmarks/benchmark_page.dart';
 
 class ModelsPage extends StatefulWidget {
   const ModelsPage({super.key, this.store, this.importService, this.fileVerifier, this.runtimeManager});
@@ -32,8 +37,8 @@ class _ModelsPageState extends State<ModelsPage> {
   late Future<List<ModelRecord>> _modelsFuture;
   final Set<String> _importingModelIds = {};
   final Set<String> _verifyingModelIds = {};
+  final Set<String> _fitEstimatingModelIds = {};
   final Set<String> _loadingModelIds = {};
-  final Set<String> _switchingModelIds = {};
   bool _unloadingRuntime = false;
 
   @override
@@ -133,6 +138,10 @@ class _ModelsPageState extends State<ModelsPage> {
         contextLength: imported.inspection.contextLength,
         blockCount: imported.inspection.blockCount,
         embeddingLength: imported.inspection.embeddingLength,
+        attentionHeadCount: imported.inspection.attentionHeadCount,
+        attentionHeadCountKv: imported.inspection.attentionHeadCountKv,
+        attentionKeyLength: imported.inspection.attentionKeyLength,
+        attentionValueLength: imported.inspection.attentionValueLength,
         fileType: imported.inspection.fileType,
         parameterCount: imported.inspection.parameterCount,
       );
@@ -195,28 +204,110 @@ class _ModelsPageState extends State<ModelsPage> {
     }
   }
 
-  Future<void> _prepareRuntime(ModelRecord model) async {
+  Future<void> _estimateModelFit(ModelRecord model) async {
+    if (_fitEstimatingModelIds.contains(model.id) ||
+        _runtimeManager.isBusy ||
+        _runtimeManager.isGenerating) {
+      return;
+    }
+    setState(() => _fitEstimatingModelIds.add(model.id));
     try {
-      final result = await _runtimeManager.prepare(model);
-      if (!mounted) {
-        return;
+      final verification = await _fileVerifier.verify(model);
+      if (!verification.isValid) {
+        throw StateError(verification.message);
       }
-      setState(() => _runtimeSnapshot = result);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.message),
-          duration: const Duration(seconds: 5),
+      final resources = await DeviceResourceMonitor().readSnapshot(
+            includeExtendedTelemetry: true,
+          ) ??
+          const ResourceSnapshot(availableMemoryBytes: 0, cpuLogicalCores: 1);
+      final settings = await ResourceSettingsRepository().load();
+      final verifiedBytes =
+          verification.actualSizeBytes ?? model.sizeBytes ?? 0;
+      final recommendation = AdaptiveInferencePolicy.recommend(
+        model: model,
+        verifiedModelFileBytes: verifiedBytes,
+        resources: resources,
+        settings: settings,
+        freshInspection: verification.inspection,
+      );
+      if (!mounted) return;
+      final selection = await showDialog<InferenceRuntimeSelection>(
+        context: context,
+        builder: (_) => _AdaptiveInferenceDialog(
+          model: model,
+          recommendation: recommendation,
+          resources: resources,
+          settings: settings,
+          verifiedModelFileBytes: verifiedBytes,
+          freshInspection: verification.inspection,
         ),
       );
-    } catch (error) {
-      if (!mounted) {
-        return;
+      if (selection == null || !mounted) return;
+
+      final active = _runtimeManager.snapshot;
+      if (active.needsRecovery) {
+        throw StateError('يجب استعادة المحرك قبل تجهيز نموذج جديد.');
       }
+      final changesLoadedSession = active.isLoaded &&
+          (active.modelId != model.id ||
+              active.contextTokens != selection.contextTokens ||
+              active.cpuThreads != selection.cpuThreads);
+      if (changesLoadedSession) {
+        final switchingDifferentModel = active.modelId != model.id;
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(switchingDifferentModel
+                ? 'تبديل النموذج النشط؟'
+                : 'إعادة تحميل النموذج بالإعدادات الجديدة؟'),
+            content: Text(
+              'سيتم تفريغ الجلسة الحالية ثم تحميل «${model.displayName}» '
+              'بالسياق ${selection.contextTokens} وخيوط CPU عدد ${selection.cpuThreads}. '
+              'إذا فشل التحميل سيحاول المحرك استعادة الجلسة السابقة.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('تأكيد التبديل'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true || !mounted) return;
+      }
+
+      final result = active.isLoaded
+          ? await _runtimeManager.switchTo(
+              model,
+              contextTokens: selection.contextTokens,
+              cpuThreads: selection.cpuThreads,
+            )
+          : await _runtimeManager.prepare(
+              model,
+              contextTokens: selection.contextTokens,
+              cpuThreads: selection.cpuThreads,
+            );
+      if (!mounted) return;
+      setState(() => _runtimeSnapshot = result);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تقييم جاهزية التشغيل: $error')),
+        SnackBar(content: Text(result.message)),
       );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر إعداد تشغيل النموذج: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _fitEstimatingModelIds.remove(model.id));
+      }
     }
   }
+
 
   Future<void> _loadPreparedModel(ModelRecord model) async {
     if (_loadingModelIds.contains(model.id)) {
@@ -246,51 +337,6 @@ class _ModelsPageState extends State<ModelsPage> {
     }
   }
 
-  Future<void> _switchRuntimeModel(ModelRecord model) async {
-    if (_switchingModelIds.contains(model.id) ||
-        _runtimeManager.isBusy ||
-        _runtimeManager.isGenerating) {
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('تبديل النموذج النشط؟'),
-        content: Text(
-          'سيتم تفريغ النموذج الحالي ثم تحميل «${model.displayName}». '
-          'إذا فشل التحميل سيحاول المحرك استعادة النموذج السابق.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('تأكيد التبديل'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _switchingModelIds.add(model.id));
-    try {
-      final result = await _runtimeManager.switchTo(model);
-      if (!mounted) return;
-      setState(() => _runtimeSnapshot = result);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.message)),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر تبديل النموذج: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => _switchingModelIds.remove(model.id));
-    }
-  }
 
   Future<void> _unloadRuntime() async {
     if (_unloadingRuntime) {
@@ -416,9 +462,31 @@ class _ModelsPageState extends State<ModelsPage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
               children: [
-                Text(
-                  'مكتبة النماذج',
-                  style: Theme.of(context).textTheme.titleLarge,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'مكتبة النماذج',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _runtimeManager.isBusy || _runtimeManager.isGenerating
+                          ? null
+                          : () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => BenchmarkPage(
+                                    models: models,
+                                    runtimeManager: _runtimeManager,
+                                  ),
+                                ),
+                              );
+                            },
+                      icon: const Icon(Icons.speed_rounded),
+                      label: const Text('قياس الأداء'),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -489,21 +557,32 @@ class _ModelsPageState extends State<ModelsPage> {
                                 children: [
                                   TextButton.icon(
                                     onPressed: _runtimeManager.isBusy ||
-                                            _runtimeManager.isGenerating
+                                            _runtimeManager.isGenerating ||
+                                            _fitEstimatingModelIds.contains(model.id)
                                         ? null
-                                        : () => _prepareRuntime(model),
-                                    icon: const Icon(Icons.play_circle_outline),
-                                    label: const Text('تقييم جاهزية التشغيل'),
+                                        : () => _estimateModelFit(model),
+                                    icon: _fitEstimatingModelIds.contains(model.id)
+                                        ? const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(strokeWidth: 2),
+                                          )
+                                        : const Icon(Icons.auto_awesome_outlined),
+                                    label: Text(
+                                      _fitEstimatingModelIds.contains(model.id)
+                                          ? 'جارٍ تحليل الموارد…'
+                                          : 'اقتراح إعداد التشغيل التكيفي',
+                                    ),
                                   ),
                                   if (_runtimeSnapshot?.state == ModelSessionState.loaded &&
                                       _runtimeSnapshot?.modelId != model.id)
                                     FilledButton.tonalIcon(
                                       onPressed: _runtimeManager.isBusy ||
                                               _runtimeManager.isGenerating ||
-                                              _switchingModelIds.contains(model.id)
+                                              _fitEstimatingModelIds.contains(model.id)
                                           ? null
-                                          : () => _switchRuntimeModel(model),
-                                      icon: _switchingModelIds.contains(model.id)
+                                          : () => _estimateModelFit(model),
+                                      icon: _fitEstimatingModelIds.contains(model.id)
                                           ? const SizedBox(
                                               width: 16,
                                               height: 16,
@@ -511,9 +590,9 @@ class _ModelsPageState extends State<ModelsPage> {
                                             )
                                           : const Icon(Icons.swap_horiz_rounded),
                                       label: Text(
-                                        _switchingModelIds.contains(model.id)
-                                            ? 'جارٍ التبديل…'
-                                            : 'التبديل إلى هذا النموذج',
+                                        _fitEstimatingModelIds.contains(model.id)
+                                            ? 'جارٍ تحليل الموارد…'
+                                            : 'تبديل مع ضبط الموارد',
                                       ),
                                     ),
                                   if (_runtimeManager.engineAvailable &&
@@ -855,6 +934,265 @@ class _AddModelDialogState extends State<_AddModelDialog> {
           child: const Text('حفظ'),
         ),
       ],
+    );
+  }
+}
+
+
+class _AdaptiveInferenceDialog extends StatefulWidget {
+  const _AdaptiveInferenceDialog({
+    required this.model,
+    required this.recommendation,
+    required this.resources,
+    required this.settings,
+    required this.verifiedModelFileBytes,
+    required this.freshInspection,
+  });
+
+  final ModelRecord model;
+  final AdaptiveInferenceRecommendation recommendation;
+  final ResourceSnapshot resources;
+  final ResourceSettings settings;
+  final int verifiedModelFileBytes;
+  final GgufInspection? freshInspection;
+
+  @override
+  State<_AdaptiveInferenceDialog> createState() =>
+      _AdaptiveInferenceDialogState();
+}
+
+class _AdaptiveInferenceDialogState extends State<_AdaptiveInferenceDialog> {
+  late int _contextTokens = widget.recommendation.contextTokens;
+  late int _cpuThreads = widget.recommendation.cpuThreads;
+
+  ModelFitEstimate get _estimate => ModelFitEstimator.estimate(
+        model: widget.model,
+        verifiedModelFileBytes: widget.verifiedModelFileBytes,
+        contextTokens: _contextTokens,
+        availableMemoryBytes: widget.resources.availableMemoryBytes,
+        freshInspection: widget.freshInspection,
+      );
+
+  Future<void> _apply() async {
+    final estimate = _estimate;
+    if (estimate.status == ModelFitStatus.insufficient) {
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('الذاكرة غير كافية حسب التقدير'),
+          content: const Text(
+            'الاحتياج التقديري أعلى من RAM المتاحة. يمكنك متابعة فحص الجاهزية '
+            'يدوياً، لكن محمّل llama.cpp سيظل صاحب القرار النهائي وقد يرفض التحميل. '
+            'هل تريد المتابعة بهذه الإعدادات؟',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('العودة'),
+            ),
+            FilledButton.tonal(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('المتابعة رغم التحذير'),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true || !mounted) return;
+    }
+    Navigator.of(context).pop(
+      InferenceRuntimeSelection(
+        contextTokens: _contextTokens,
+        cpuThreads: _cpuThreads,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final estimate = _estimate;
+    final theme = Theme.of(context);
+    final statusColor = switch (estimate.status) {
+      ModelFitStatus.likelyFits => Colors.green,
+      ModelFitStatus.tight => Colors.orange,
+      ModelFitStatus.insufficient => theme.colorScheme.error,
+      ModelFitStatus.unknown => theme.colorScheme.onSurfaceVariant,
+    };
+    return AlertDialog(
+      title: const Text('إعداد التشغيل التكيفي'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.model.displayName, style: theme.textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Text(
+                'وضع الموارد: ${widget.settings.label}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text('حجم السياق', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: widget.recommendation.contextOptions.map((value) {
+                  return ChoiceChip(
+                    label: Text('$value'),
+                    selected: _contextTokens == value,
+                    onSelected: (selected) {
+                      if (selected) setState(() => _contextTokens = value);
+                    },
+                  );
+                }).toList(growable: false),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'المقترح التلقائي: ${widget.recommendation.contextTokens} رمزاً. '
+                'التغيير هنا لا يبدل جلسة نشطة تلقائياً.',
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('خيوط CPU', style: theme.textTheme.titleSmall),
+                  Text('$_cpuThreads / 8', textDirection: TextDirection.ltr),
+                ],
+              ),
+              Slider(
+                value: _cpuThreads.toDouble(),
+                min: 1,
+                max: 8,
+                divisions: 7,
+                label: '$_cpuThreads',
+                onChanged: (value) => setState(() => _cpuThreads = value.round()),
+              ),
+              Text(
+                'المقترح: ${widget.recommendation.cpuThreads} خيطاً. '
+                'الحد 8 نابع من واجهة المحرك الحالية، وليس من حصة سحابية.',
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  estimate.reason ?? estimate.statusLabel,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: statusColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              _ModelFitMetric(
+                label: 'حجم ملف الأوزان',
+                value: formatModelMemoryBytes(estimate.modelFileBytes),
+              ),
+              _ModelFitMetric(
+                label: 'KV Cache المقدر',
+                value: formatModelMemoryBytes(estimate.kvCacheBytes),
+              ),
+              _ModelFitMetric(
+                label: 'حجز التشغيل والسياق',
+                value: formatModelMemoryBytes(estimate.runtimeReserveBytes),
+              ),
+              _ModelFitMetric(
+                label: 'الاحتياج الموصى به',
+                value: formatModelMemoryBytes(estimate.recommendedRequiredBytes),
+                emphasize: true,
+              ),
+              _ModelFitMetric(
+                label: 'RAM المتاحة الآن',
+                value: estimate.hasKnownAvailability
+                    ? formatModelMemoryBytes(estimate.availableMemoryBytes)
+                    : 'غير متاحة',
+              ),
+              const SizedBox(height: 12),
+              Text('أسباب التوصية', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              ...widget.recommendation.reasons.map(
+                (reason) => Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: Text('• $reason', style: theme.textTheme.bodySmall),
+                ),
+              ),
+              if (widget.recommendation.warnings.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('تنبيهات', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 6),
+                ...widget.recommendation.warnings.map(
+                  (warning) => Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(
+                      '• $warning',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Text(
+                'هذه توصية وليست ضماناً للتحميل. سيعيد محرك llama.cpp فحص الذاكرة '
+                'قبل تخصيص النموذج، ولا يتم تعديل الإعدادات أو الجلسة دون اعتمادك.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: _apply,
+          child: const Text('اعتماد الإعداد وفحص الجاهزية'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelFitMetric extends StatelessWidget {
+  const _ModelFitMetric({
+    required this.label,
+    required this.value,
+    this.emphasize = false,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasize;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = emphasize
+        ? Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)
+        : Theme.of(context).textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: style)),
+          const SizedBox(width: 12),
+          Text(value, style: style, textDirection: TextDirection.ltr),
+        ],
+      ),
     );
   }
 }

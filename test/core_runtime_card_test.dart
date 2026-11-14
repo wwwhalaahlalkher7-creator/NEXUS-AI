@@ -8,10 +8,14 @@ class _FakeRuntimeService implements CoreRuntimeService {
   const _FakeRuntimeService();
 
   @override
+  Future<MemoryLifecycleResult> clearContextMemory() async =>
+      const MemoryLifecycleResult(success: false, message: 'unavailable');
+
+  @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '0.9.0',
-        stage: 'alpha-2.6.2-peer-task-transfer',
+        stage: 'alpha-2.7.6-explainable-placement',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',
         inferenceAvailable: false,
@@ -25,11 +29,22 @@ class _FakeRuntimeService implements CoreRuntimeService {
 }
 
 class _LoadedRuntimeService implements CoreRuntimeService {
+  int clearCalls = 0;
+
+  @override
+  Future<MemoryLifecycleResult> clearContextMemory() async {
+    clearCalls++;
+    return const MemoryLifecycleResult(
+      success: true,
+      message: 'تم تفريغ KV Cache المؤقت.',
+    );
+  }
+
   @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '1.7.0',
-        stage: 'alpha-2.6.2-peer-task-transfer',
+        stage: 'alpha-2.7.6-explainable-placement',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-initialized',
         inferenceAvailable: false,
@@ -40,6 +55,15 @@ class _LoadedRuntimeService implements CoreRuntimeService {
         nativeEngineVersion: '0.9.0',
         nativeEngineMessage: 'loaded',
         modelContextTokens: 2048,
+        nativeMemoryAvailable: true,
+        nativeMemoryReadable: true,
+        nativeContextLoaded: true,
+        nativeResidentBytes: 256 * 1024 * 1024,
+        nativePeakResidentBytes: 320 * 1024 * 1024,
+        nativeVirtualBytes: 512 * 1024 * 1024,
+        nativeKvCacheClearCount: 7,
+        nativeModelLoadCount: 2,
+        nativeModelUnloadCount: 1,
       );
 }
 
@@ -87,4 +111,27 @@ void main() {
       );
     },
   );
+
+  testWidgets('shows native memory metrics and clears only KV cache on confirmation', (tester) async {
+    final service = _LoadedRuntimeService();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CoreRuntimeCard(service: service)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ذاكرة العملية الحالية RSS'), findsOneWidget);
+    expect(find.text('256.0 MiB'), findsOneWidget);
+    expect(find.text('7'), findsOneWidget);
+
+    await tester.tap(find.text('تفريغ KV Cache المؤقت'));
+    await tester.pumpAndSettle();
+    expect(find.text('ستظل أوزان النموذج وسياق التشغيل محمّلين، وقد يُعاد بناء KV عند الطلب التالي. هل تريد المتابعة؟'), findsOneWidget);
+    await tester.tap(find.text('تفريغ KV Cache').last);
+    await tester.pumpAndSettle();
+
+    expect(service.clearCalls, 1);
+    expect(find.text('تم تفريغ KV Cache المؤقت.'), findsOneWidget);
+  });
 }

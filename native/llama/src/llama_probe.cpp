@@ -29,6 +29,22 @@ struct NexusChatMessage {
     const char *content;
 };
 
+// Additive C ABI snapshot. RSS/peak/virtual values describe the whole process,
+// not llama.cpp allocations in isolation. A zero value is meaningful only when
+// memory_readable is set.
+struct NexusMemorySnapshot {
+    std::int32_t memory_readable;
+    std::int32_t model_loaded;
+    std::int32_t context_loaded;
+    std::int32_t generation_active;
+    std::uint64_t resident_bytes;
+    std::uint64_t peak_resident_bytes;
+    std::uint64_t virtual_bytes;
+    std::uint64_t kv_cache_clear_count;
+    std::uint64_t model_load_count;
+    std::uint64_t model_unload_count;
+};
+
 namespace {
 constexpr std::uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr std::uint64_t kBaseReserveBytes = 384ULL * kMiB;
@@ -55,6 +71,11 @@ std::mutex session_mutex;
 std::atomic<bool> generation_active{false};
 std::atomic<bool> cancellation_requested{false};
 std::atomic<bool> inference_verified{false};
+std::atomic<bool> session_model_loaded{false};
+std::atomic<bool> session_context_loaded{false};
+std::atomic<std::uint64_t> kv_cache_clear_count{0};
+std::atomic<std::uint64_t> model_load_count{0};
+std::atomic<std::uint64_t> model_unload_count{0};
 LoadedSession session;
 thread_local std::string last_error;
 
@@ -141,22 +162,28 @@ struct GenerationLifecycle {
     GenerationLifecycle &operator=(const GenerationLifecycle &) = delete;
 };
 
+bool clear_context_memory(llama_context *context) noexcept {
+    if (context == nullptr) {
+        return false;
+    }
+    const auto memory = llama_get_memory(context);
+    if (memory == nullptr) {
+        return false;
+    }
+    llama_memory_clear(memory, true);
+    kv_cache_clear_count.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 struct ContextMemoryReset {
     explicit ContextMemoryReset(llama_context *value) noexcept : context(value) {
-        if (context != nullptr) {
-            const auto memory = llama_get_memory(context);
-            if (memory != nullptr) {
-                llama_memory_clear(memory, true);
-            }
-        }
+        // The caller owns session_mutex for the complete generation call.
+        clear_context_memory(context);
     }
     ~ContextMemoryReset() {
-        if (context != nullptr) {
-            const auto memory = llama_get_memory(context);
-            if (memory != nullptr) {
-                llama_memory_clear(memory, true);
-            }
-        }
+        // RAII guarantees prompt/decode/callback failures and cancellation all
+        // clear the transient KV state before session_mutex is released.
+        clear_context_memory(context);
     }
     llama_context *context;
 };
@@ -179,17 +206,65 @@ struct BatchGuard {
 
 void release_session_locked() {
     inference_verified.store(false, std::memory_order_release);
+    const bool had_session = session.context != nullptr || session.model != nullptr;
+    // Drop sequence/KV state while its owning context is still alive, then
+    // destroy the context before the model whose tensors it references.
     if (session.context != nullptr) {
+        clear_context_memory(session.context);
+        session_context_loaded.store(false, std::memory_order_release);
         llama_free(session.context);
         session.context = nullptr;
     }
     if (session.model != nullptr) {
+        session_model_loaded.store(false, std::memory_order_release);
         llama_model_free(session.model);
         session.model = nullptr;
+    }
+    if (had_session) {
+        model_unload_count.fetch_add(1, std::memory_order_relaxed);
     }
     session.path.clear();
     session.context_tokens = 0;
     session.threads = 0;
+}
+
+bool read_process_memory(NexusMemorySnapshot &snapshot) {
+    std::ifstream status_file("/proc/self/status");
+    if (!status_file.is_open()) {
+        return false;
+    }
+    bool has_rss = false;
+    bool has_peak = false;
+    bool has_virtual = false;
+    std::string line;
+    while (std::getline(status_file, line)) {
+        const char *key = nullptr;
+        std::uint64_t *target = nullptr;
+        if (line.compare(0, 6, "VmRSS:") == 0) {
+            key = "VmRSS:";
+            target = &snapshot.resident_bytes;
+        } else if (line.compare(0, 6, "VmHWM:") == 0) {
+            key = "VmHWM:";
+            target = &snapshot.peak_resident_bytes;
+        } else if (line.compare(0, 7, "VmSize:") == 0) {
+            key = "VmSize:";
+            target = &snapshot.virtual_bytes;
+        }
+        if (target == nullptr || key == nullptr) {
+            continue;
+        }
+        std::istringstream values(line.substr(std::strlen(key)));
+        std::uint64_t kib = 0;
+        std::string unit;
+        if (!(values >> kib >> unit) || unit != "kB" || kib > UINT64_MAX / 1024ULL) {
+            continue;
+        }
+        *target = kib * 1024ULL;
+        if (key[2] == 'R') has_rss = true;
+        if (key[2] == 'H') has_peak = true;
+        if (key[2] == 'S') has_virtual = true;
+    }
+    return has_rss && has_peak && has_virtual;
 }
 }  // namespace
 
@@ -316,6 +391,9 @@ NEXUS_EXPORT std::int32_t nexus_llama_load_model(
         session.path.swap(active_path);
         session.context_tokens = loaded_context_tokens;
         session.threads = threads;
+        session_model_loaded.store(true, std::memory_order_release);
+        session_context_loaded.store(true, std::memory_order_release);
+        model_load_count.fetch_add(1, std::memory_order_relaxed);
         if (actual_context_tokens != nullptr) {
             *actual_context_tokens = loaded_context_tokens;
         }
@@ -796,6 +874,61 @@ NEXUS_EXPORT std::int32_t nexus_llama_generate(
     } catch (...) {
         set_error("حدث خطأ غير معروف أثناء توليد النص.");
         return -9;
+    }
+}
+
+
+// Returns a non-blocking process/native lifecycle snapshot. Memory values are
+// process-wide Linux status metrics and can remain high after free() because
+// the system allocator may retain reusable pages.
+NEXUS_EXPORT std::int32_t nexus_llama_memory_snapshot(
+    NexusMemorySnapshot *snapshot) noexcept {
+    if (snapshot == nullptr) {
+        set_error("مؤشر لقطة الذاكرة فارغ.");
+        return 0;
+    }
+    try {
+        *snapshot = NexusMemorySnapshot{};
+        snapshot->model_loaded = session_model_loaded.load(std::memory_order_acquire) ? 1 : 0;
+        snapshot->context_loaded = session_context_loaded.load(std::memory_order_acquire) ? 1 : 0;
+        snapshot->generation_active = generation_active.load(std::memory_order_acquire) ? 1 : 0;
+        snapshot->kv_cache_clear_count = kv_cache_clear_count.load(std::memory_order_relaxed);
+        snapshot->model_load_count = model_load_count.load(std::memory_order_relaxed);
+        snapshot->model_unload_count = model_unload_count.load(std::memory_order_relaxed);
+        snapshot->memory_readable = read_process_memory(*snapshot) ? 1 : 0;
+        return 1;
+    } catch (...) {
+        set_error("تعذر قراءة لقطة دورة حياة الذاكرة.");
+        return 0;
+    }
+}
+
+// Clears only transient KV/sequence state. It never frees model weights or the
+// context. try_lock prevents a maintenance action from blocking an active decode.
+NEXUS_EXPORT std::int32_t nexus_llama_clear_context_memory() noexcept {
+    try {
+        if (generation_active.load(std::memory_order_acquire)) {
+            set_error("تعذر تفريغ KV Cache أثناء انشغال جلسة النموذج.");
+            return 0;
+        }
+        std::unique_lock<std::mutex> lock(session_mutex, std::try_to_lock);
+        if (!lock.owns_lock() || generation_active.load(std::memory_order_acquire)) {
+            set_error("تعذر تفريغ KV Cache أثناء انشغال جلسة النموذج.");
+            return 0;
+        }
+        if (session.context == nullptr) {
+            set_error("لا يوجد سياق محمّل لتفريغ KV Cache.");
+            return 0;
+        }
+        if (!clear_context_memory(session.context)) {
+            set_error("لم يُرجع llama.cpp مساحة ذاكرة السياق.");
+            return 0;
+        }
+        last_error.clear();
+        return 1;
+    } catch (...) {
+        set_error("حدث خطأ أثناء تفريغ KV Cache.");
+        return 0;
     }
 }
 

@@ -21,6 +21,10 @@ pub struct GgufMetadata {
     pub context_length: Option<u64>,
     pub block_count: Option<u64>,
     pub embedding_length: Option<u64>,
+    pub attention_head_count: Option<u64>,
+    pub attention_head_count_kv: Option<u64>,
+    pub attention_key_length: Option<u64>,
+    pub attention_value_length: Option<u64>,
     pub file_type: Option<u64>,
     pub parameter_count: Option<u64>,
 }
@@ -91,7 +95,11 @@ pub fn inspect_gguf_file(path: &str) -> Result<GgufInspection, String> {
             }
             _ if key.ends_with(".context_length")
                 || key.ends_with(".block_count")
-                || key.ends_with(".embedding_length") =>
+                || key.ends_with(".embedding_length")
+                || key.ends_with(".attention.head_count")
+                || key.ends_with(".attention.head_count_kv")
+                || key.ends_with(".attention.key_length")
+                || key.ends_with(".attention.value_length") =>
             {
                 let value = read_unsigned_value(&mut file, size_bytes, value_type)?;
                 architecture_specific.push((key, value));
@@ -108,6 +116,10 @@ pub fn inspect_gguf_file(path: &str) -> Result<GgufInspection, String> {
                     "context_length" => metadata.context_length = Some(value),
                     "block_count" => metadata.block_count = Some(value),
                     "embedding_length" => metadata.embedding_length = Some(value),
+                    "attention.head_count" => metadata.attention_head_count = Some(value),
+                    "attention.head_count_kv" => metadata.attention_head_count_kv = Some(value),
+                    "attention.key_length" => metadata.attention_key_length = Some(value),
+                    "attention.value_length" => metadata.attention_value_length = Some(value),
                     _ => {}
                 }
             }
@@ -303,6 +315,25 @@ mod tests {
         assert_eq!(result.metadata.block_count, Some(32));
         assert_eq!(result.metadata.file_type, Some(15));
         assert_eq!(result.metadata.parameter_count, Some(3_000_000_000));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reads_architecture_specific_kv_cache_dimensions() {
+        let mut bytes = test_header(7);
+        push_string_entry(&mut bytes, "general.architecture", "llama");
+        push_u32_entry(&mut bytes, "llama.attention.head_count", 32);
+        push_u32_entry(&mut bytes, "llama.attention.head_count_kv", 8);
+        push_u32_entry(&mut bytes, "llama.attention.key_length", 128);
+        push_u32_entry(&mut bytes, "llama.attention.value_length", 128);
+        push_u32_entry(&mut bytes, "llama.block_count", 32);
+        push_u32_entry(&mut bytes, "llama.embedding_length", 4096);
+        let path = temp_file("kv-metadata.gguf", &bytes);
+        let result = inspect_gguf_file(&path).unwrap();
+        assert_eq!(result.metadata.attention_head_count, Some(32));
+        assert_eq!(result.metadata.attention_head_count_kv, Some(8));
+        assert_eq!(result.metadata.attention_key_length, Some(128));
+        assert_eq!(result.metadata.attention_value_length, Some(128));
         fs::remove_file(path).unwrap();
     }
 

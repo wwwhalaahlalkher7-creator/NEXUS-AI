@@ -38,6 +38,10 @@ class _MemoryModelStore implements ModelStore {
     int? contextLength,
     int? blockCount,
     int? embeddingLength,
+    int? attentionHeadCount,
+    int? attentionHeadCountKv,
+    int? attentionKeyLength,
+    int? attentionValueLength,
     int? fileType,
     int? parameterCount,
   }) async {}

@@ -235,18 +235,38 @@ std::int32_t nexus_llama_generate(const NexusChatMessage *, std::size_t, std::ui
                                   std::uint32_t, float, std::uint32_t, TokenCallback, void *,
                                   std::uint32_t *, std::uint32_t *) noexcept;
 const char *nexus_llama_last_error() noexcept;
+struct NexusMemorySnapshot {
+    std::int32_t memory_readable;
+    std::int32_t model_loaded;
+    std::int32_t context_loaded;
+    std::int32_t generation_active;
+    std::uint64_t resident_bytes;
+    std::uint64_t peak_resident_bytes;
+    std::uint64_t virtual_bytes;
+    std::uint64_t kv_cache_clear_count;
+    std::uint64_t model_load_count;
+    std::uint64_t model_unload_count;
+};
+std::int32_t nexus_llama_memory_snapshot(NexusMemorySnapshot *) noexcept;
+std::int32_t nexus_llama_clear_context_memory() noexcept;
 const char *nexus_test_last_tokenized_prompt();
 }
 struct Capture {
     std::string text;
     bool cancel_first = false;
     bool cancel_on_start = false;
+    bool clear_on_start = false;
+    std::int32_t clear_result = -1;
     int start_events = 0;
 };
 static std::int32_t capture_piece(const char *data, std::size_t size, std::uint32_t generated, void *opaque) {
     auto *capture = static_cast<Capture *>(opaque);
     if (size == 0 && data == nullptr && generated == 0) {
         ++capture->start_events;
+        if (capture->clear_on_start) {
+            capture->clear_on_start = false;
+            capture->clear_result = nexus_llama_clear_context_memory();
+        }
         if (capture->cancel_on_start) {
             capture->cancel_on_start = false;
             assert(nexus_llama_cancel_generation() == 1);
@@ -275,6 +295,14 @@ int main() {
     assert(std::string(nexus_llama_version()) == "fake-llama-contract");
     assert(nexus_llama_is_model_loaded() == 0);
     assert(nexus_llama_inference_available() == 0);
+    NexusMemorySnapshot memory_snapshot{};
+    assert(nexus_llama_memory_snapshot(&memory_snapshot) == 1);
+    assert(memory_snapshot.model_loaded == 0);
+    assert(memory_snapshot.context_loaded == 0);
+    assert(memory_snapshot.generation_active == 0);
+    assert(memory_snapshot.memory_readable == 1);
+    assert(memory_snapshot.resident_bytes > 0);
+    assert(nexus_llama_memory_snapshot(nullptr) == 0);
 
     Capture empty_capture{};
     std::uint32_t generated = 0;
@@ -292,6 +320,15 @@ int main() {
     assert(actual_context == 2048);
     assert(nexus_llama_is_model_loaded() == 1);
     assert(nexus_llama_loaded_context_tokens() == 2048);
+    assert(nexus_llama_memory_snapshot(&memory_snapshot) == 1);
+    assert(memory_snapshot.model_loaded == 1);
+    assert(memory_snapshot.context_loaded == 1);
+    assert(memory_snapshot.generation_active == 0);
+    assert(memory_snapshot.model_load_count == 1);
+    assert(memory_snapshot.model_unload_count == 0);
+    assert(nexus_llama_clear_context_memory() == 1);
+    assert(nexus_llama_memory_snapshot(&memory_snapshot) == 1);
+    assert(memory_snapshot.kv_cache_clear_count == 1);
 
     actual_context = 0;
     assert(nexus_llama_load_model(model_a.c_str(), 2048, 4, &actual_context) == 1);
@@ -302,6 +339,7 @@ int main() {
 
     Capture cancelled_before_tokens{};
     cancelled_before_tokens.cancel_on_start = true;
+    cancelled_before_tokens.clear_on_start = true;
     generated = 0;
     const NexusChatMessage stop_before[] = {{"user", "Stop before prompt evaluation"}};
     assert(nexus_llama_generate(stop_before, 1, 32, 0.7F, 40, 0.92F, 7,
@@ -428,7 +466,17 @@ int main() {
     assert(nexus_llama_is_model_loaded() == 0);
     assert(nexus_llama_loaded_context_tokens() == 0);
     assert(nexus_llama_inference_available() == 0);
+    assert(nexus_llama_memory_snapshot(&memory_snapshot) == 1);
+    assert(memory_snapshot.model_loaded == 0);
+    assert(memory_snapshot.context_loaded == 0);
+    assert(memory_snapshot.generation_active == 0);
+    assert(memory_snapshot.model_load_count == 1);
+    assert(memory_snapshot.model_unload_count == 1);
+    const auto clears_after_unload = memory_snapshot.kv_cache_clear_count;
     assert(nexus_llama_unload_model() == 1);
+    assert(nexus_llama_memory_snapshot(&memory_snapshot) == 1);
+    assert(memory_snapshot.model_unload_count == 1);
+    assert(memory_snapshot.kv_cache_clear_count == clears_after_unload);
 
     assert(nexus_llama_load_model(model_a.c_str(), 256, 4, &actual_context) == -1);
     assert(nexus_llama_load_model(model_a.c_str(), 2048, 0, &actual_context) == -1);
@@ -501,6 +549,7 @@ def main() -> None:
                 "nexus_llama_inference_available", "nexus_llama_cancel_generation",
                 "nexus_llama_generate", "nexus_llama_unload_model", "nexus_llama_is_model_loaded",
                 "nexus_llama_loaded_context_tokens", "nexus_llama_last_error",
+                "nexus_llama_memory_snapshot", "nexus_llama_clear_context_memory",
             )
             missing = [symbol for symbol in required if symbol not in symbols]
             if missing:

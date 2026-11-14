@@ -18,6 +18,10 @@ class GgufInspection {
     this.contextLength,
     this.blockCount,
     this.embeddingLength,
+    this.attentionHeadCount,
+    this.attentionHeadCountKv,
+    this.attentionKeyLength,
+    this.attentionValueLength,
     this.fileType,
     this.parameterCount,
   });
@@ -34,6 +38,10 @@ class GgufInspection {
   final int? contextLength;
   final int? blockCount;
   final int? embeddingLength;
+  final int? attentionHeadCount;
+  final int? attentionHeadCountKv;
+  final int? attentionKeyLength;
+  final int? attentionValueLength;
   final int? fileType;
   final int? parameterCount;
   final String message;
@@ -59,6 +67,10 @@ class RustGgufInspector {
       contextLength: result.contextLength,
       blockCount: result.blockCount,
       embeddingLength: result.embeddingLength,
+      attentionHeadCount: result.attentionHeadCount,
+      attentionHeadCountKv: result.attentionHeadCountKv,
+      attentionKeyLength: result.attentionKeyLength,
+      attentionValueLength: result.attentionValueLength,
       fileType: result.fileType,
       parameterCount: result.parameterCount,
       message: result.message,

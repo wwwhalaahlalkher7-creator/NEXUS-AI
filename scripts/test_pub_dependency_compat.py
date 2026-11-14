@@ -26,7 +26,7 @@ checks = {
     "GGUF import consumes one PlatformFile directly": "selected.path" in models and "selected.files" not in models,
     "FRB integration script uses valid shell continuations": integration_lines[integration_index].endswith("\\") and integration_lines[integration_index + 1].endswith("\\"),
     "SelectableText content expression closes only its value group before named arguments": ": content),\n                textDirection: Directionality.of(context)," in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8") and ": content)),\n                textDirection: Directionality.of(context)," not in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8"),
-    "Flutter build version has advanced without changing Rust ABI crate version": pubspec["version"] == "2.6.2+47",
+    "Flutter package version is 2.8.0+59 while Rust ABI remains 2.6.2": pubspec["version"] == "2.8.0+59" and "version = \"2.6.2\"" in (ROOT / "Cargo.toml").read_text(encoding="utf-8"),
     "peer IPv4 parsing rejects non-canonical and out-of-range octets": "part.length > 1 && part.startsWith('0')" in (ROOT / "lib/src/features/devices/peer_protocol.dart").read_text(encoding="utf-8") and "value > 255" in (ROOT / "lib/src/features/devices/peer_protocol.dart").read_text(encoding="utf-8"),
     "pairing invitation expiry is normalized to UTC": "DateTime.fromMillisecondsSinceEpoch(expiresAt, isUtc: true)" in (ROOT / "lib/src/features/devices/peer_discovery.dart").read_text(encoding="utf-8"),
     "empty conversation remains scrollable in short layouts": "SingleChildScrollView" in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8") and "BoxConstraints(minHeight: constraints.maxHeight)" in (ROOT / "lib/src/features/inference/inference_page.dart").read_text(encoding="utf-8"),
@@ -38,6 +38,13 @@ checks = {
     ),
     "device-page flow control uses explicit blocks": not any("if (mounted) setState(" in line or "if (!mounted) return;" in line for line in (ROOT / "lib/src/features/devices/devices_page.dart").read_text(encoding="utf-8").splitlines()),
 }
+
+checks.update({
+    "approved peer proposals can be remapped to local agent IDs": "class RemoteTaskPlanRemapper" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "localAgentByRemoteId" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8"),
+    "peer proposal import commits task and source reference inside one transaction": "importIncomingAsLocalTask" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "db.transaction((txn) async" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8") and "imported_task_id" in (ROOT / "lib/src/features/devices/peer_task_transfer.dart").read_text(encoding="utf-8"),
+    "device UI requires explicit local agent mapping before import": "_chooseLocalAgentMappings" in (ROOT / "lib/src/features/devices/devices_page.dart").read_text(encoding="utf-8") and "تأكيد التعيين والاستيراد" in (ROOT / "lib/src/features/devices/devices_page.dart").read_text(encoding="utf-8"),
+    "peer capability snapshot reports the Alpha 2.8.0 app version": "'app_version': '2.8.0'" in (ROOT / "lib/src/features/devices/device_network_service.dart").read_text(encoding="utf-8"),
+})
 
 failed = [name for name, passed in checks.items() if not passed]
 for name, passed in checks.items():

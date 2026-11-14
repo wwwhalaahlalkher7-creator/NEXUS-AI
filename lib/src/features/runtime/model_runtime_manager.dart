@@ -36,6 +36,7 @@ class ModelSessionSnapshot {
     this.modelId,
     this.modelFileBytes,
     this.contextTokens,
+    this.cpuThreads,
   });
 
   const ModelSessionSnapshot.idle()
@@ -43,13 +44,15 @@ class ModelSessionSnapshot {
         message = 'لا توجد جلسة نموذج نشطة.',
         modelId = null,
         modelFileBytes = null,
-        contextTokens = null;
+        contextTokens = null,
+        cpuThreads = null;
 
   final ModelSessionState state;
   final String message;
   final String? modelId;
   final int? modelFileBytes;
   final int? contextTokens;
+  final int? cpuThreads;
 
   bool get isPrepared => state == ModelSessionState.readyToLoad;
   bool get isLoaded => state == ModelSessionState.loaded;
@@ -61,6 +64,16 @@ class ModelSessionSnapshot {
         modelId: modelId,
         modelFileBytes: modelFileBytes,
         contextTokens: contextTokens,
+        cpuThreads: cpuThreads,
+      );
+
+  ModelSessionSnapshot copyWithCpuThreads(int? value) => ModelSessionSnapshot(
+        state: state,
+        message: message,
+        modelId: modelId,
+        modelFileBytes: modelFileBytes,
+        contextTokens: contextTokens,
+        cpuThreads: value,
       );
 }
 
@@ -127,6 +140,8 @@ class ModelRuntimeManager extends ChangeNotifier {
   ModelRecord? _activeModel;
   bool _operationInProgress = false;
   bool _generationInProgress = false;
+  int? _preparedCpuThreads;
+  int? _activeCpuThreads;
   bool _disposed = false;
 
   ModelSessionSnapshot get snapshot => _snapshot;
@@ -179,7 +194,19 @@ class ModelRuntimeManager extends ChangeNotifier {
     super.dispose();
   }
 
-  Future<ModelSessionSnapshot> prepare(ModelRecord model) async {
+  Future<ModelSessionSnapshot> prepare(
+    ModelRecord model, {
+    int? contextTokens,
+    int? cpuThreads,
+  }) async {
+    if (cpuThreads != null && (cpuThreads < 1 || cpuThreads > 8)) {
+      throw ArgumentError.value(cpuThreads, 'cpuThreads', 'يجب أن يكون بين 1 و8.');
+    }
+    if (contextTokens != null &&
+        (contextTokens < 512 || contextTokens > _policy.maxContextTokens)) {
+      throw ArgumentError.value(contextTokens, 'contextTokens', 'خارج حدود المحرك.');
+    }
+    _preparedCpuThreads = null;
     _beginOperation();
     try {
       if (_snapshot.needsRecovery) {
@@ -196,9 +223,15 @@ class ModelRuntimeManager extends ChangeNotifier {
         message: 'جارٍ التحقق من ملف النموذج وسياسة الموارد…',
         modelId: model.id,
       ));
-      final result = await _inspectModel(model);
-      _publish(result);
-      return result;
+      final result = await _inspectModel(
+        model,
+        requestedContextTokens: contextTokens,
+      );
+      _preparedCpuThreads = result.isPrepared
+          ? (cpuThreads ?? _policy.cpuThreads)
+          : null;
+      _publish(result.copyWithCpuThreads(_preparedCpuThreads));
+      return _snapshot;
     } catch (error) {
       if (_snapshot.needsRecovery ||
           (_snapshot.state == ModelSessionState.loaded &&
@@ -228,27 +261,32 @@ class ModelRuntimeManager extends ChangeNotifier {
         return _snapshot;
       }
       final context = _snapshot.contextTokens ?? _policy.contextTokens;
+      final threads = _preparedCpuThreads ?? _policy.cpuThreads;
       _publish(ModelSessionSnapshot(
         state: ModelSessionState.loading,
         message: 'جارٍ تحميل الأوزان وإنشاء سياق CPU…',
         modelId: model.id,
         modelFileBytes: _snapshot.modelFileBytes,
         contextTokens: context,
+        cpuThreads: threads,
       ));
       final actualContext = await _backend.load(
         model,
         contextTokens: context,
-        threads: _policy.cpuThreads,
+        threads: threads,
       );
       if (!_isValidReturnedContext(actualContext)) {
         return await _recoverInvalidLoad(model, actualContext);
       }
       _activeModel = model;
+      _activeCpuThreads = threads;
+      _preparedCpuThreads = null;
       _publish(_loadedSnapshot(
         model,
         actualContext,
-        'تم تحميل النموذج فعلياً وإنشاء سياق CPU بحجم $actualContext رمزاً.',
+        'تم تحميل النموذج فعلياً بسياق $actualContext رمزاً و$threads خيط CPU.',
         fileBytes: _snapshot.modelFileBytes,
+        cpuThreads: threads,
       ));
       return _snapshot;
     } catch (error) {
@@ -256,6 +294,7 @@ class ModelRuntimeManager extends ChangeNotifier {
         rethrow;
       }
       _activeModel = null;
+      _activeCpuThreads = null;
       return _fail(model, 'فشل تحميل النموذج: $error');
     } finally {
       _endOperation();
@@ -265,16 +304,32 @@ class ModelRuntimeManager extends ChangeNotifier {
   /// Explicitly replaces the active model. The target is verified before the
   /// current session is unloaded. If target loading fails, the previous model
   /// is restored when possible; otherwise the manager enters recoveryRequired.
-  Future<ModelSessionSnapshot> switchTo(ModelRecord target) async {
+  Future<ModelSessionSnapshot> switchTo(
+    ModelRecord target, {
+    int? contextTokens,
+    int? cpuThreads,
+  }) async {
+    if (cpuThreads != null && (cpuThreads < 1 || cpuThreads > 8)) {
+      throw ArgumentError.value(cpuThreads, 'cpuThreads', 'يجب أن يكون بين 1 و8.');
+    }
+    if (contextTokens != null &&
+        (contextTokens < 512 || contextTokens > _policy.maxContextTokens)) {
+      throw ArgumentError.value(contextTokens, 'contextTokens', 'خارج حدود المحرك.');
+    }
     _beginOperation();
     final previousSnapshot = _snapshot;
     final previousModel = _activeModel;
+    final previousThreads = _activeCpuThreads ?? _policy.cpuThreads;
+    final targetThreads = cpuThreads ?? _policy.cpuThreads;
     var previousUnloaded = false;
     var targetLoadAttempted = false;
     var targetLoaded = false;
 
     try {
-      if (previousSnapshot.isLoaded && previousSnapshot.modelId == target.id) {
+      if (previousSnapshot.isLoaded &&
+          previousSnapshot.modelId == target.id &&
+          (contextTokens == null || contextTokens == previousSnapshot.contextTokens) &&
+          (cpuThreads == null || cpuThreads == previousSnapshot.cpuThreads)) {
         return previousSnapshot;
       }
 
@@ -283,7 +338,10 @@ class ModelRuntimeManager extends ChangeNotifier {
         message: 'جارٍ فحص النموذج الجديد قبل تغيير الجلسة الحالية…',
         modelId: target.id,
       ));
-      final prepared = await _inspectModel(target);
+      final prepared = await _inspectModel(
+        target,
+        requestedContextTokens: contextTokens,
+      );
       if (!prepared.isPrepared) {
         final message = 'لم يبدأ التبديل: ${prepared.message}';
         _publish(previousSnapshot.withMessage(message));
@@ -309,11 +367,13 @@ class ModelRuntimeManager extends ChangeNotifier {
           modelId: target.id,
           modelFileBytes: prepared.modelFileBytes,
           contextTokens: prepared.contextTokens,
+          cpuThreads: targetThreads,
         ));
         try {
           await _backend.unload();
           previousUnloaded = true;
           _activeModel = null;
+          _activeCpuThreads = null;
         } catch (error) {
           _publish(previousSnapshot.withMessage(
             'تعذر تفريغ النموذج الحالي؛ لم يتم تحميل النموذج الجديد: $error',
@@ -328,12 +388,13 @@ class ModelRuntimeManager extends ChangeNotifier {
         modelId: target.id,
         modelFileBytes: prepared.modelFileBytes,
         contextTokens: prepared.contextTokens,
+        cpuThreads: targetThreads,
       ));
       targetLoadAttempted = true;
       final actualContext = await _backend.load(
         target,
         contextTokens: prepared.contextTokens ?? _policy.contextTokens,
-        threads: _policy.cpuThreads,
+        threads: targetThreads,
       );
       targetLoaded = true;
       if (!_isValidReturnedContext(actualContext)) {
@@ -341,11 +402,13 @@ class ModelRuntimeManager extends ChangeNotifier {
       }
 
       _activeModel = target;
+      _activeCpuThreads = targetThreads;
       _publish(_loadedSnapshot(
         target,
         actualContext,
-        'اكتمل التبديل وحُمّل النموذج الجديد على CPU بسياق $actualContext رمزاً.',
+        'اكتمل التبديل بسياق $actualContext رمزاً و$targetThreads خيط CPU.',
         fileBytes: prepared.modelFileBytes,
+        cpuThreads: targetThreads,
       ));
       return _snapshot;
     } catch (error) {
@@ -358,17 +421,19 @@ class ModelRuntimeManager extends ChangeNotifier {
             previousModel,
             contextTokens:
                 previousSnapshot.contextTokens ?? _policy.contextTokens,
-            threads: _policy.cpuThreads,
+            threads: previousThreads,
           );
           if (!_isValidReturnedContext(restoredContext)) {
             throw StateError('أعاد المحرك سياقاً غير صالح أثناء استعادة النموذج السابق.');
           }
           _activeModel = previousModel;
+          _activeCpuThreads = previousThreads;
           _publish(_loadedSnapshot(
             previousModel,
             restoredContext,
             'فشل تحميل النموذج الجديد ($error)، وتمت استعادة النموذج السابق بنجاح.',
             fileBytes: previousSnapshot.modelFileBytes,
+            cpuThreads: previousThreads,
           ));
           return _snapshot;
         } catch (restoreError) {
@@ -405,6 +470,7 @@ class ModelRuntimeManager extends ChangeNotifier {
         }
       }
       _activeModel = null;
+      _activeCpuThreads = null;
       return _fail(target, 'فشل تبديل النموذج: $error');
     } finally {
       _endOperation();
@@ -427,9 +493,12 @@ class ModelRuntimeManager extends ChangeNotifier {
         modelId: previous.modelId,
         modelFileBytes: previous.modelFileBytes,
         contextTokens: previous.contextTokens,
+        cpuThreads: previous.cpuThreads,
       ));
       await _backend.unload();
       _activeModel = null;
+      _activeCpuThreads = null;
+      _preparedCpuThreads = null;
       _publish(const ModelSessionSnapshot.idle());
       return _snapshot;
     } catch (error) {
@@ -443,6 +512,7 @@ class ModelRuntimeManager extends ChangeNotifier {
         modelId: _snapshot.modelId,
         modelFileBytes: _snapshot.modelFileBytes,
         contextTokens: _snapshot.contextTokens,
+        cpuThreads: _snapshot.cpuThreads,
       ));
       return _snapshot;
     } finally {
@@ -457,10 +527,14 @@ class ModelRuntimeManager extends ChangeNotifier {
         _snapshot.needsRecovery) {
       return;
     }
+    _preparedCpuThreads = null;
     _publish(const ModelSessionSnapshot.idle());
   }
 
-  Future<ModelSessionSnapshot> _inspectModel(ModelRecord model) async {
+  Future<ModelSessionSnapshot> _inspectModel(
+    ModelRecord model, {
+    int? requestedContextTokens,
+  }) async {
     if (model.runtime != ModelRuntime.llamaCpp) {
       return _failedSnapshot(model, 'هذا الإصدار يدعم تشغيل نماذج llama.cpp المحلية فقط.');
     }
@@ -479,7 +553,23 @@ class ModelRuntimeManager extends ChangeNotifier {
         'حجم الملف يتجاوز حد السياسة المخصص (${_formatBytes(fileByteCeiling)}).',
       );
     }
-    final requestedContext = _effectiveContextTokens(model);
+    final declaredContext = verification.inspection == null
+        ? model.contextLength
+        : verification.inspection!.contextLength;
+    final requestedContext = requestedContextTokens ??
+        _effectiveContextTokens(
+          model,
+          trainingContext: declaredContext,
+          useCatalogFallback: verification.inspection == null,
+        );
+    if (declaredContext != null &&
+        declaredContext > 0 &&
+        requestedContext > declaredContext) {
+      return _failedSnapshot(
+        model,
+        'السياق المطلوب ($requestedContext) يتجاوز نافذة GGUF المعلنة ($declaredContext).',
+      );
+    }
     if (requestedContext < 512) {
       return _failedSnapshot(
         model,
@@ -502,6 +592,7 @@ class ModelRuntimeManager extends ChangeNotifier {
       modelId: model.id,
       modelFileBytes: actualSize,
       contextTokens: requestedContext,
+      cpuThreads: _policy.cpuThreads,
     );
   }
 
@@ -513,6 +604,7 @@ class ModelRuntimeManager extends ChangeNotifier {
       await _backend.unload();
     } catch (releaseError) {
       _activeModel = model;
+      _activeCpuThreads = _snapshot.cpuThreads ?? _policy.cpuThreads;
       _publish(ModelSessionSnapshot(
         state: ModelSessionState.loaded,
         message: 'أعاد المحرك سياقاً خارج السياسة وتعذر تفريغه؛ ما زالت الجلسة محمّلة. '
@@ -520,10 +612,12 @@ class ModelRuntimeManager extends ChangeNotifier {
         modelId: model.id,
         modelFileBytes: _snapshot.modelFileBytes,
         contextTokens: actualContext,
+        cpuThreads: _activeCpuThreads,
       ));
       return _snapshot;
     }
     _activeModel = null;
+    _activeCpuThreads = null;
     return _fail(model, 'أعاد المحرك حجم سياق غير صالح بعد التحميل.');
   }
 
@@ -532,6 +626,7 @@ class ModelRuntimeManager extends ChangeNotifier {
     int contextTokens,
     String message, {
     int? fileBytes,
+    int? cpuThreads,
   }) =>
       ModelSessionSnapshot(
         state: ModelSessionState.loaded,
@@ -539,13 +634,20 @@ class ModelRuntimeManager extends ChangeNotifier {
         modelId: model.id,
         modelFileBytes: fileBytes ?? model.sizeBytes,
         contextTokens: contextTokens,
+        cpuThreads: cpuThreads,
       );
 
   bool _isValidReturnedContext(int value) =>
       value >= 512 && value <= _policy.maxContextTokens;
 
-  int _effectiveContextTokens(ModelRecord model) {
-    final modelLimit = model.contextLength;
+  int _effectiveContextTokens(
+    ModelRecord model, {
+    int? trainingContext,
+    bool useCatalogFallback = true,
+  }) {
+    final modelLimit = useCatalogFallback
+        ? (trainingContext ?? model.contextLength)
+        : trainingContext;
     if (modelLimit == null || modelLimit <= 0) {
       return _policy.contextTokens;
     }
@@ -562,6 +664,7 @@ class ModelRuntimeManager extends ChangeNotifier {
       );
 
   ModelSessionSnapshot _fail(ModelRecord model, String message) {
+    _preparedCpuThreads = null;
     _publish(_failedSnapshot(model, message));
     return _snapshot;
   }

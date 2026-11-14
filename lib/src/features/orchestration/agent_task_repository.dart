@@ -223,6 +223,47 @@ class AgentTaskRepository {
     return rows.map(AgentTaskEventRecord.fromMap).toList(growable: false);
   }
 
+  /// Atomically reserves a local task run only when no outbound peer step is
+  /// waiting, approved, or executing. The peer outbox and task rows share this
+  /// SQLite database, so this transaction serializes against remote dispatch.
+  Future<bool> beginTaskRun(String taskId) async {
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final remoteRows = await txn.query(
+        'peer_task_executions',
+        columns: ['execution_id'],
+        where: 'direction = ? AND source_task_id = ? AND status IN (?, ?, ?, ?)',
+        whereArgs: [
+          'outgoing',
+          taskId,
+          'queued',
+          'awaiting_approval',
+          'approved',
+          'running',
+        ],
+        limit: 1,
+      );
+      if (remoteRows.isNotEmpty) return false;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final changed = await txn.update(
+        'agent_tasks',
+        {
+          'status': AgentTaskStatus.running.name,
+          'error': null,
+          'updated_at_unix_ms': now,
+        },
+        where: 'id = ? AND status IN (?, ?, ?)',
+        whereArgs: [
+          taskId,
+          AgentTaskStatus.planned.name,
+          AgentTaskStatus.interrupted.name,
+          AgentTaskStatus.cancelled.name,
+        ],
+      );
+      return changed == 1;
+    });
+  }
+
   Future<void> setTaskStatus(
     String taskId,
     AgentTaskStatus status, {

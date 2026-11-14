@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nexus_app/src/features/models/model_file_verifier.dart';
 import 'package:nexus_app/src/features/models/model_record.dart';
+import 'package:nexus_app/src/features/models/rust_gguf_inspector.dart';
 import 'package:nexus_app/src/features/runtime/model_runtime_manager.dart';
 
 class _FakeVerifier implements ModelFileVerifier {
@@ -470,4 +471,152 @@ void main() {
     expect((await firstOperation).state, ModelSessionState.readyToLoad);
     expect(manager.isBusy, isFalse);
   });
+  test('prepared adaptive context and CPU threads are passed to the backend', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    final prepared = await manager.prepare(
+      _model(),
+      contextTokens: 1024,
+      cpuThreads: 2,
+    );
+    expect(prepared.state, ModelSessionState.readyToLoad);
+    expect(prepared.contextTokens, 1024);
+    expect(prepared.cpuThreads, 2);
+
+    final loaded = await manager.loadPrepared(_model());
+    expect(loaded.state, ModelSessionState.loaded);
+    expect(loaded.contextTokens, 1024);
+    expect(loaded.cpuThreads, 2);
+    expect(backend.lastContextTokens, 1024);
+    expect(backend.lastThreads, 2);
+  });
+
+  test('adaptive runtime overrides reject values outside native limits', () async {
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: _FakeBackend(),
+    );
+
+    await expectLater(
+      manager.prepare(_model(), cpuThreads: 9),
+      throwsArgumentError,
+    );
+    await expectLater(
+      manager.prepare(_model(), contextTokens: 8192),
+      throwsArgumentError,
+    );
+  });
+
+  test('switch restores previous CPU thread selection after target load failure', () async {
+    final backend = _FakeBackend();
+    final verifier = _validVerifier()
+      ..resultsByModelId['model-2'] = const ModelFileVerification(
+        isValid: true,
+        actualSizeBytes: 2048,
+        message: 'valid target',
+      );
+    final manager = ModelRuntimeManager(
+      verifier: verifier,
+      backend: backend,
+    );
+
+    await manager.prepare(_model(), contextTokens: 1024, cpuThreads: 3);
+    await manager.loadPrepared(_model());
+    backend.failLoadModelIds.add('model-2');
+
+    final target = _model(id: 'model-2');
+    final result = await manager.switchTo(
+      target,
+      contextTokens: 2048,
+      cpuThreads: 6,
+    );
+
+    expect(result.state, ModelSessionState.loaded);
+    expect(result.modelId, 'model-1');
+    expect(result.contextTokens, 1024);
+    expect(result.cpuThreads, 3);
+    expect(backend.lastThreads, 3);
+  });
+
+  test('switchTo can explicitly reload the active model with new adaptive settings', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model(), contextTokens: 1024, cpuThreads: 2);
+    await manager.loadPrepared(_model());
+    final result = await manager.switchTo(
+      _model(),
+      contextTokens: 2048,
+      cpuThreads: 5,
+    );
+
+    expect(result.state, ModelSessionState.loaded);
+    expect(result.contextTokens, 2048);
+    expect(result.cpuThreads, 5);
+    expect(backend.unloadCalls, 1);
+    expect(backend.lastContextTokens, 2048);
+    expect(backend.lastThreads, 5);
+  });
+
+  test('prepare rejects context above fresh GGUF limit instead of stale model metadata', () async {
+    final verifier = _FakeVerifier(const ModelFileVerification(
+      isValid: true,
+      actualSizeBytes: 1024,
+      message: 'verified fresh file',
+      inspection: GgufInspection(
+        validHeader: true,
+        fileName: 'fresh.gguf',
+        sizeBytes: 1024,
+        formatVersion: 3,
+        tensorCount: 1,
+        metadataCount: 1,
+        contextLength: 1024,
+        message: 'fresh',
+      ),
+    ));
+    final manager = ModelRuntimeManager(
+      verifier: verifier,
+      backend: _FakeBackend(),
+    );
+
+    final result = await manager.prepare(_model(contextLength: 8192), contextTokens: 2048);
+
+    expect(result.state, ModelSessionState.failed);
+    expect(result.message, contains('نافذة GGUF المعلنة'));
+  });
+
+  test('fresh GGUF without context metadata does not reuse a stale catalog limit', () async {
+    final verifier = _FakeVerifier(const ModelFileVerification(
+      isValid: true,
+      actualSizeBytes: 1024,
+      message: 'verified fresh file',
+      inspection: GgufInspection(
+        validHeader: true,
+        fileName: 'fresh.gguf',
+        sizeBytes: 1024,
+        formatVersion: 3,
+        tensorCount: 1,
+        metadataCount: 1,
+        contextLength: null,
+        message: 'fresh context unavailable',
+      ),
+    ));
+    final manager = ModelRuntimeManager(
+      verifier: verifier,
+      backend: _FakeBackend(),
+    );
+
+    final result = await manager.prepare(_model(contextLength: 8192));
+
+    expect(result.state, ModelSessionState.readyToLoad);
+    expect(result.contextTokens, 2048);
+  });
+
 }

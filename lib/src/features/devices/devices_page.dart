@@ -5,17 +5,35 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr/qr.dart';
 
+import '../agents/agent_record.dart';
+import '../agents/agent_repository.dart';
+import '../models/model_record.dart';
+import '../models/model_repository.dart';
+import '../models/model_file_verifier.dart';
+import '../orchestration/agent_task_orchestrator.dart';
+import '../orchestration/agent_task_plan.dart';
+import '../orchestration/local_llama_agent_executor.dart';
+import '../resources/resource_settings.dart';
+import '../resources/peer_resource_advisor.dart';
+import '../resources/peer_model_profile.dart';
+import '../runtime/model_runtime_manager.dart';
+import '../orchestration/agent_task_repository.dart';
 import 'device_network_service.dart';
 import 'device_record.dart';
 import 'pairing_qr_scanner_page.dart';
 import 'peer_discovery.dart';
 import 'peer_task_transfer.dart';
-import '../orchestration/agent_task_repository.dart';
+import 'peer_task_execution.dart';
 
 class DevicesPage extends StatefulWidget {
-  const DevicesPage({super.key, required this.service});
+  const DevicesPage({
+    super.key,
+    required this.service,
+    required this.runtimeManager,
+  });
 
   final DeviceNetworkService service;
+  final ModelRuntimeManager runtimeManager;
 
   @override
   State<DevicesPage> createState() => _DevicesPageState();
@@ -28,19 +46,26 @@ class _DevicesPageState extends State<DevicesPage> {
   StreamSubscription<DeviceNetworkEvent>? _eventsSubscription;
   List<PairedDeviceRecord> _devices = const [];
   List<RemoteTaskTransferRecord> _transfers = const [];
+  List<PeerTaskExecutionRecord> _executions = const [];
   List<DiscoveredPeer> _nearbyDevices = const [];
   PairingInvite? _invite;
   bool _loading = true;
   bool _scanningNearby = false;
   bool _busy = false;
+  late final ModelRuntimeManager _runtimeManager;
   String? _status;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    _runtimeManager = widget.runtimeManager;
     widget.service.onPairingRequest = _confirmPairing;
     widget.service.onTaskProposalRequest = _confirmIncomingTaskProposal;
+    widget.service.configurePeerExecutionHandlers(
+      approvalHandler: _approvePeerTaskExecution,
+      executeHandler: _executePeerTaskOnLocalAgent,
+    );
     _eventsSubscription = widget.service.events.listen(_handleEvent);
     unawaited(_initialize());
   }
@@ -96,7 +121,11 @@ class _DevicesPageState extends State<DevicesPage> {
         event.type == DeviceNetworkEventType.taskProposalReceived ||
         event.type == DeviceNetworkEventType.taskProposalSent ||
         event.type == DeviceNetworkEventType.taskProposalDeclined ||
-        event.type == DeviceNetworkEventType.taskProposalRejected) {
+        event.type == DeviceNetworkEventType.taskProposalRejected ||
+        event.type == DeviceNetworkEventType.taskExecutionReceived ||
+        event.type == DeviceNetworkEventType.taskExecutionStarted ||
+        event.type == DeviceNetworkEventType.taskExecutionFinished ||
+        event.type == DeviceNetworkEventType.taskExecutionUpdated) {
       unawaited(_reload());
     }
   }
@@ -154,13 +183,381 @@ class _DevicesPageState extends State<DevicesPage> {
     return approved == true;
   }
 
+  Future<PeerTaskExecutionApproval?> _approvePeerTaskExecution(
+    PeerTaskExecutionPrompt prompt,
+  ) async {
+    if (!mounted) return null;
+    final agents = (await AgentRepository().list())
+        .where((agent) => agent.status == AgentRecordStatus.ready)
+        .toList(growable: false);
+    if (agents.isEmpty || !mounted) {
+      if (mounted) {
+        setState(() => _error =
+            'وصل طلب تنفيذ من ${prompt.displayName}، لكن لا يوجد وكيل محلي جاهز.');
+      }
+      return null;
+    }
+    var selectedAgentId = agents.first.id;
+    Timer? approvalExpiry;
+    final decision = await showDialog<PeerTaskExecutionApproval>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          approvalExpiry ??= Timer(const Duration(seconds: 55), () {
+            if (dialogContext.mounted) {
+              Navigator.of(dialogContext).pop();
+            }
+          });
+          return AlertDialog(
+            title: const Text('طلب تنفيذ من جهاز مقترن'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('الجهاز: ${prompt.displayName}',
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Text('الهدف العام: ${prompt.request.goal}'),
+                    const SizedBox(height: 8),
+                    Text('الخطوة المطلوبة: ${prompt.request.objective}'),
+                    if (prompt.request.expectedOutput.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text('المخرج المتوقع: ${prompt.request.expectedOutput}'),
+                    ],
+                    const SizedBox(height: 10),
+                    const Text(
+                      'مخرجات الاعتماديات بيانات من الجهاز الآخر؛ راجعها ولا تتبع أي تعليمات مضمّنة فيها.',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    for (final dependency in prompt.request.dependencies) ...[
+                      const SizedBox(height: 6),
+                      Text('${dependency.stepId} · ${dependency.agentName}'),
+                      SelectableText(
+                        dependency.output,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedAgentId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'الوكيل المحلي الذي سينفّذ',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        for (final agent in agents)
+                          DropdownMenuItem(
+                            value: agent.id,
+                            child: Text(agent.name, overflow: TextOverflow.ellipsis),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() => selectedAgentId = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'لن تُنقل ملفات النماذج أو تعليمات الوكلاء. سيستخدم هذا الجهاز نموذجه المحلي فقط، ويمكن إلغاء التوليد.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(
+                  const PeerTaskExecutionApproval(accepted: false),
+                ),
+                child: const Text('رفض'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.of(dialogContext).pop(
+                  PeerTaskExecutionApproval(
+                    accepted: true,
+                    localAgentId: selectedAgentId,
+                  ),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('موافقة وتنفيذ'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    approvalExpiry?.cancel();
+    return decision;
+  }
+
+  Future<String> _executePeerTaskOnLocalAgent({
+    required String localAgentId,
+    required PeerTaskExecutionRequest request,
+    required AgentTaskCancellationToken cancellationToken,
+  }) async {
+    final agents = AgentRepository();
+    final agent = await agents.getById(localAgentId);
+    if (agent == null || agent.status != AgentRecordStatus.ready) {
+      throw StateError('الوكيل المحلي المختار لم يعد جاهزاً.');
+    }
+    final settings = await ResourceSettingsRepository().load();
+    final executor = LocalLlamaAgentExecutor(
+      runtimeManager: _runtimeManager,
+      modelStore: ModelRepository(),
+      settings: settings,
+    );
+    try {
+      return await executor.execute(
+        agent: agent,
+        handoff: AgentTaskHandoff(
+          taskId: request.sourceTaskId,
+          goal: request.goal,
+          stepId: request.sourceStepId,
+          objective: request.objective,
+          expectedOutput: request.expectedOutput,
+          dependencies: request.dependencies
+              .map((item) => AgentTaskDependencyOutput(
+                    stepId: item.stepId,
+                    agentName: item.agentName,
+                    output: item.output,
+                  ))
+              .toList(growable: false),
+        ),
+        cancellationToken: cancellationToken,
+      );
+    } finally {
+      await executor.restorePreviousSession();
+    }
+  }
+
+  Future<void> _sendRemoteStep(PairedDeviceRecord device) async {
+    if (_busy || !widget.service.isConnected(device.id)) return;
+    final tasks = (await AgentTaskRepository().list())
+        .where((task) => {'planned', 'interrupted'}.contains(task.status.name))
+        .toList(growable: false);
+    if (tasks.isEmpty || !mounted) {
+      if (mounted) {
+        setState(() => _status = 'لا توجد مهام مخططة أو متوقفة لإرسال خطوة منها.');
+      }
+      return;
+    }
+    final task = await showDialog<AgentTaskRecord>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('اختر المهمة'),
+        children: [
+          for (final item in tasks)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(item),
+              child: Text(item.goal, maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+        ],
+      ),
+    );
+    if (task == null || !mounted) return;
+    final steps = await AgentTaskRepository().steps(task.id);
+    final byKey = {for (final step in steps) step.stepKey: step};
+    final candidates = steps.where((step) =>
+        {'pending', 'interrupted'}.contains(step.status.name) &&
+        step.dependsOn.every((id) => byKey[id]?.status == AgentTaskStepStatus.succeeded)
+    ).toList(growable: false);
+    if (candidates.isEmpty || !mounted) {
+      if (mounted) {
+        setState(() => _error = 'لا توجد خطوة جاهزة للإرسال؛ أكمل اعتماديات الخطوات أولاً.');
+      }
+      return;
+    }
+    final step = await showDialog<AgentTaskStepRecord>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('اختر الخطوة لإرسالها'),
+        children: [
+          for (final item in candidates)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(item),
+              child: Text('${item.stepKey} · ${item.objective}', maxLines: 3, overflow: TextOverflow.ellipsis),
+            ),
+        ],
+      ),
+    );
+    if (step == null || !mounted) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _status = 'جارٍ إرسال خطوة مشفّرة إلى ${device.displayName}...';
+    });
+    try {
+      await widget.service.sendTaskStepForRemoteExecution(
+        deviceId: device.id,
+        taskId: task.id,
+        stepKey: step.stepKey,
+      );
+      await _reload();
+      if (mounted) {
+        setState(() => _status = 'أُرسل الطلب؛ لن يبدأ التنفيذ إلا بعد موافقة الجهاز المستلم.');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  String _executionStatusLabel(PeerTaskExecutionRecord record) => switch (record.status) {
+        PeerTaskExecutionStatus.queued => 'في قائمة الإرسال',
+        PeerTaskExecutionStatus.awaitingApproval => 'ينتظر الموافقة',
+        PeerTaskExecutionStatus.approved => 'تمت الموافقة',
+        PeerTaskExecutionStatus.running => 'قيد التنفيذ',
+        PeerTaskExecutionStatus.succeeded => 'اكتمل بنجاح',
+        PeerTaskExecutionStatus.failed => 'فشل',
+        PeerTaskExecutionStatus.cancelled => 'أُلغي',
+        PeerTaskExecutionStatus.rejected => 'مرفوض',
+        PeerTaskExecutionStatus.interrupted => 'انقطع التنفيذ',
+      };
+
+  String _executionGoal(PeerTaskExecutionRecord record) {
+    try {
+      final decoded = jsonDecode(record.requestJson) as Map;
+      final value = decoded['objective'];
+      return value is String ? value : record.sourceStepKey;
+    } on Object {
+      return record.sourceStepKey;
+    }
+  }
+
+  Future<void> _cancelRemoteExecution(PeerTaskExecutionRecord record) async {
+    try {
+      await widget.service.cancelRemoteExecution(record.executionId);
+      if (mounted) {
+        setState(() => _status = 'أُرسل طلب إلغاء التنفيذ إلى الجهاز المقابل.');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
+    }
+  }
+
+  Widget _peerTaskExecutionsSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text('تنفيذ الخطوات بين الأجهزة',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+            ),
+            IconButton(onPressed: _reload, icon: const Icon(Icons.refresh_rounded)),
+          ],
+        ),
+        if (_executions.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(18),
+              child: Center(child: Text('لا توجد طلبات تنفيذ موزّعة بعد.')),
+            ),
+          )
+        else
+          for (final record in _executions)
+            Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(record.direction == 'incoming' ? Icons.move_to_inbox_rounded : Icons.outbox_rounded),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(_executionGoal(record), maxLines: 3, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700))),
+                        Text(_executionStatusLabel(record),
+                            style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text('${record.direction == 'incoming' ? 'وارد من' : 'مُرسل إلى'} ${record.deviceId} · ${record.sourceStepKey}',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    if (record.error != null && record.error!.isNotEmpty)
+                      Text(record.error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+                    if (record.resultJson != null) ...[
+                      const SizedBox(height: 6),
+                      Builder(builder: (context) {
+                        try {
+                          final result = jsonDecode(record.resultJson!) as Map;
+                          final output = result['output_text'];
+                          if (output is String && output.isNotEmpty) {
+                            return SelectableText(output, maxLines: 8);
+                          }
+                        } on Object {
+                          return const Text('تعذر عرض النتيجة المحفوظة.');
+                        }
+                        return const SizedBox.shrink();
+                      }),
+                    ],
+                    if (record.direction == 'outgoing' &&
+                        (record.status == PeerTaskExecutionStatus.queued ||
+                         record.status == PeerTaskExecutionStatus.awaitingApproval ||
+                         record.status == PeerTaskExecutionStatus.running))
+                      Align(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: TextButton.icon(
+                          onPressed: () => _cancelRemoteExecution(record),
+                          icon: const Icon(Icons.cancel_outlined, size: 18),
+                          label: const Text('طلب الإلغاء'),
+                        ),
+                      ),
+                    if (record.direction == 'incoming' &&
+                        record.status == PeerTaskExecutionStatus.running)
+                      Align(
+                        alignment: AlignmentDirectional.centerEnd,
+                        child: TextButton.icon(
+                          onPressed: () async {
+                            try {
+                              await widget.service.cancelLocalPeerExecution(record.executionId);
+                              if (mounted) {
+                                setState(() => _status = 'أُرسل إلغاء التوليد المحلي.');
+                              }
+                            } on Object catch (error) {
+                              if (mounted) {
+        setState(() => _error = error.toString());
+      }
+                            }
+                          },
+                          icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                          label: const Text('إيقاف التنفيذ المحلي'),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+
   Future<void> _reload() async {
     final devices = await widget.service.listDevices();
     final transfers = await widget.service.listTaskTransfers();
+    final executions = await widget.service.listPeerTaskExecutions();
     if (mounted) {
       setState(() {
         _devices = devices;
         _transfers = transfers;
+        _executions = executions;
       });
     }
   }
@@ -224,6 +621,132 @@ class _DevicesPageState extends State<DevicesPage> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  Future<void> _importTaskTransfer(RemoteTaskTransferRecord transfer) async {
+    if (_busy || transfer.direction != 'incoming' || transfer.status != 'kept') {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _status = 'جارٍ تجهيز استيراد المقترح وربط الوكلاء المحليين...';
+    });
+    try {
+      final localAgents = (await AgentRepository().list())
+          .where((agent) => agent.status == AgentRecordStatus.ready)
+          .toList(growable: false);
+      if (localAgents.isEmpty) {
+        throw StateError('أنشئ وكيلاً محلياً واحداً على الأقل واجعله جاهزاً قبل استيراد المهمة.');
+      }
+      final decoded = jsonDecode(transfer.planJson) as Map<String, dynamic>;
+      final sourceSteps = decoded['steps'] as List<dynamic>;
+      final remoteAgentIds = sourceSteps
+          .map((step) => (step as Map<String, dynamic>)['agent_id'] as String)
+          .toSet()
+          .toList(growable: false);
+      final mapping = await _chooseLocalAgentMappings(
+        remoteAgentIds: remoteAgentIds,
+        localAgents: localAgents,
+      );
+      if (mapping == null || !mounted) {
+        return;
+      }
+      final mappedJson = RemoteTaskPlanRemapper.remap(transfer.planJson, mapping);
+      final plan = AgentTaskPlanParser.parse(
+        mappedJson,
+        agents: localAgents,
+        expectedGoal: transfer.goal,
+      );
+      final taskId = await widget.service.importTaskProposal(
+        transferId: transfer.transferId,
+        locallyMappedPlan: plan,
+      );
+      await _reload();
+      if (mounted) {
+        setState(() => _status =
+            'استُورد المقترح كمهمة محلية ($taskId). افتح الوكلاء ثم المهام لمراجعته وتشغيله يدوياً.');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<Map<String, String>?> _chooseLocalAgentMappings({
+    required List<String> remoteAgentIds,
+    required List<AgentRecord> localAgents,
+  }) async {
+    final selected = <String, String?>{};
+    return showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final allSelected = remoteAgentIds.every((id) => selected[id] != null);
+          return AlertDialog(
+            title: const Text('تعيين الوكلاء المحليين'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'معرّفات الوكلاء المرسلة تخص الجهاز الآخر. اختر وكيلاً محلياً جاهزاً لكل معرّف؛ لن تُستورد شخصية الوكيل أو تعليماته تلقائياً.',
+                    ),
+                    const SizedBox(height: 14),
+                    for (final remoteId in remoteAgentIds) ...[
+                      Text('الوكيل المرسل: $remoteId',
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 5),
+                      DropdownButtonFormField<String>(
+                        initialValue: selected[remoteId],
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'الوكيل المحلي',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: [
+                          for (final agent in localAgents)
+                            DropdownMenuItem(
+                              value: agent.id,
+                              child: Text(agent.name, overflow: TextOverflow.ellipsis),
+                            ),
+                        ],
+                        onChanged: (value) => setDialogState(() {
+                          selected[remoteId] = value;
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('إلغاء'),
+              ),
+              FilledButton(
+                onPressed: allSelected
+                    ? () => Navigator.of(dialogContext).pop({
+                        for (final id in remoteAgentIds) id: selected[id]!,
+                      })
+                    : null,
+                child: const Text('تأكيد التعيين والاستيراد'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<bool?> _confirmIncomingTaskProposal(
@@ -652,6 +1175,7 @@ class _DevicesPageState extends State<DevicesPage> {
   void dispose() {
     widget.service.onPairingRequest = null;
     widget.service.onTaskProposalRequest = null;
+    widget.service.clearPeerExecutionHandlers();
     // Leaving this screen stops accepting new devices; established sessions remain alive.
     if (widget.service.isDiscovering) {
       unawaited(widget.service.stopDiscovery());
@@ -690,6 +1214,8 @@ class _DevicesPageState extends State<DevicesPage> {
                   _pairedDevicesSection(context),
                   const SizedBox(height: 18),
                   _taskTransfersSection(context),
+                  const SizedBox(height: 18),
+                  _peerTaskExecutionsSection(context),
                   if (_status != null) ...[
                     const SizedBox(height: 12),
                     _notice(_status!, isError: false),
@@ -1019,6 +1545,21 @@ class _DevicesPageState extends State<DevicesPage> {
             ),
           ],
         ),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: FilledButton.tonalIcon(
+            onPressed: _busy ? null : _showModelPlacementAdvisor,
+            icon: const Icon(Icons.device_hub_outlined, size: 18),
+            label: const Text('ترشيح جهاز حسب نموذج GGUF'),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 8, bottom: 8),
+          child: Text(
+            'يمكن ترتيب الأجهزة وفق ملاءمة نموذج وسياق محددين. يعتمد الترشيح على بيانات موارد حديثة ووجود وكيل جاهز بملف مواصفات GGUF متوافق؛ لا يُرسل أي طلب تلقائياً.',
+            style: TextStyle(fontSize: 12),
+          ),
+        ),
         if (_devices.isEmpty)
           const Card(
             child: Padding(
@@ -1027,9 +1568,182 @@ class _DevicesPageState extends State<DevicesPage> {
             ),
           )
         else
-          for (final device in _devices) _deviceCard(context, device),
+          for (final placement in PeerExecutionPlacementAdvisor.rank(
+            devices: _devices,
+            connectedDeviceIds: widget.service.connectedDeviceIds,
+          ))
+            _deviceCard(context, placement),
       ],
     );
+  }
+
+  Future<void> _showModelPlacementAdvisor() async {
+    if (_busy) return;
+    final models = (await ModelRepository().list())
+        .where((model) =>
+            model.runtime == ModelRuntime.llamaCpp &&
+            model.status == ModelInstallStatus.installed &&
+            model.sizeBytes != null &&
+            model.sizeBytes! > 0 &&
+            PeerInstalledModelProfile.fromModel(model) != null)
+        .toList(growable: false);
+    if (!mounted) {
+      return;
+    }
+    if (models.isEmpty) {
+      setState(() => _status =
+          'لا يوجد نموذج GGUF مثبت ببيانات كافية لترشيح الأجهزة.');
+      return;
+    }
+
+    final selectedModel = await showDialog<ModelRecord>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('اختر نموذج GGUF'),
+        children: [
+          for (final model in models)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(model),
+              child: Text(
+                '${model.displayName} · ${model.architecture ?? 'معمارية غير معروفة'}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selectedModel == null || !mounted) return;
+
+    final contexts = [512, 1024, 2048, 4096]
+        .where((value) => selectedModel.contextLength == null ||
+            value <= selectedModel.contextLength!)
+        .toList(growable: false);
+    if (contexts.isEmpty) {
+      setState(() => _error = 'نافذة السياق المسجلة في GGUF لا تدعم الخيارات الحالية.');
+      return;
+    }
+    final selectedContext = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('اختر حجم السياق'),
+        children: [
+          for (final value in contexts)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(value),
+              child: Text('$value رمز'),
+            ),
+        ],
+      ),
+    );
+    if (selectedContext == null || !mounted) return;
+
+    setState(() {
+      _busy = true;
+      _error = null;
+      _status = 'جارٍ التحقق من ملف النموذج وحساب ملاءمة الأجهزة...';
+    });
+    try {
+      final verification = await LocalModelFileVerifier().verify(selectedModel);
+      if (!verification.isValid) {
+        throw StateError(verification.message);
+      }
+      final ranked = PeerExecutionPlacementAdvisor.rankForModel(
+        devices: _devices,
+        connectedDeviceIds: widget.service.connectedDeviceIds,
+        model: selectedModel,
+        verifiedModelFileBytes:
+            verification.actualSizeBytes ?? selectedModel.sizeBytes!,
+        contextTokens: selectedContext,
+      );
+      if (!mounted) {
+      return;
+    }
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('ترشيح الأجهزة · ${selectedModel.displayName}'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('السياق: $selectedContext رمز'),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'الترشيح لا ينفذ المهمة. يعتمد على تطابق مواصفات GGUF المعلنة، وليس بصمة محتوى الأوزان. سيظل على الجهاز المستلم اختيار الوكيل ومراجعة طلب التنفيذ.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  if (ranked.isEmpty)
+                    const Text('لا توجد أجهزة مقترنة للترشيح.'),
+                  for (var index = 0; index < ranked.length; index++) ...[
+                    Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${index + 1}. ${ranked[index].device.displayName}',
+                                    style: const TextStyle(fontWeight: FontWeight.w800),
+                                  ),
+                                ),
+                                Chip(
+                                  visualDensity: VisualDensity.compact,
+                                  label: Text(ranked[index].label),
+                                ),
+                              ],
+                            ),
+                            Text(ranked[index].resourceSummary,
+                                style: Theme.of(context).textTheme.bodySmall),
+                            if (ranked[index].modelFit != null) ...[
+                              const SizedBox(height: 4),
+                              Text(ranked[index].modelFit!.statusLabel,
+                                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                              Text(
+                                'الموصى به: ${(ranked[index].modelFit!.recommendedRequiredBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GiB · المتاح: ${(ranked[index].modelFit!.availableMemoryBytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GiB',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                            for (final reason in ranked[index].explanation.take(4))
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text('• $reason',
+                                    style: Theme.of(context).textTheme.bodySmall),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      );
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _error = 'تعذر حساب ترشيح الأجهزة: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
   }
 
   Widget _taskTransfersSection(BuildContext context) {
@@ -1077,13 +1791,29 @@ class _DevicesPageState extends State<DevicesPage> {
                     if (transfer.lastError != null && transfer.lastError!.isNotEmpty)
                       Text(transfer.lastError!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
                     if (transfer.direction == 'incoming' && transfer.status == 'kept')
-                      Align(
-                        alignment: AlignmentDirectional.centerEnd,
-                        child: TextButton.icon(
-                          onPressed: () => _viewTaskTransfer(transfer),
-                          icon: const Icon(Icons.visibility_outlined, size: 18),
-                          label: const Text('عرض المقترح'),
-                        ),
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => _viewTaskTransfer(transfer),
+                            icon: const Icon(Icons.visibility_outlined, size: 18),
+                            label: const Text('عرض المقترح'),
+                          ),
+                          if (transfer.importedTaskId == null)
+                            FilledButton.tonalIcon(
+                              onPressed: _busy ? null : () => _importTaskTransfer(transfer),
+                              icon: const Icon(Icons.move_to_inbox_outlined, size: 18),
+                              label: const Text('استيراد كمهمة محلية'),
+                            )
+                          else
+                            TextButton.icon(
+                              onPressed: null,
+                              icon: const Icon(Icons.task_alt_rounded, size: 18),
+                              label: const Text('مستورد محلياً'),
+                            ),
+                        ],
                       ),
                     if (transfer.direction == 'outgoing' && transfer.status == 'queued')
                       Align(
@@ -1112,6 +1842,7 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 
   String _transferStatusLabel(RemoteTaskTransferRecord transfer) {
+    if (transfer.importedTaskId != null) return 'مستورد كمهمة محلية';
     switch (transfer.status) {
       case 'queued': return 'بانتظار الإرسال';
       case 'sent': return 'تم الاستلام';
@@ -1123,12 +1854,20 @@ class _DevicesPageState extends State<DevicesPage> {
     }
   }
 
-  Widget _deviceCard(BuildContext context, PairedDeviceRecord device) {
+  Widget _deviceCard(
+    BuildContext context,
+    PeerPlacementAssessment placement,
+  ) {
+    final device = placement.device;
     final connected = widget.service.isConnected(device.id);
-    final memory = device.capabilities['available_memory_bytes'];
-    final memoryLabel = memory is num
-        ? '${(memory / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB متاحة وقت آخر تحديث'
-        : 'لم تُستلم بيانات الذاكرة بعد';
+    final colors = Theme.of(context).colorScheme;
+    final placementColor = switch (placement.status) {
+      PeerPlacementStatus.recommended => colors.primary,
+      PeerPlacementStatus.eligible => colors.secondary,
+      PeerPlacementStatus.busy => colors.tertiary,
+      PeerPlacementStatus.blocked => colors.error,
+      _ => colors.onSurfaceVariant,
+    };
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -1140,20 +1879,23 @@ class _DevicesPageState extends State<DevicesPage> {
               children: [
                 Icon(
                   connected ? Icons.devices_rounded : Icons.devices_other_rounded,
-                  color: connected ? Colors.green : Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: connected ? colors.primary : colors.onSurfaceVariant,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(device.displayName, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  child: Text(
+                    device.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ),
                 Text(
                   device.isBlocked ? 'محظور' : connected ? 'متصل' : 'غير متصل',
                   style: TextStyle(
                     color: device.isBlocked
-                        ? Colors.red
+                        ? colors.error
                         : connected
-                            ? Colors.green
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                            ? colors.primary
+                            : colors.onSurfaceVariant,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
@@ -1162,7 +1904,26 @@ class _DevicesPageState extends State<DevicesPage> {
             ),
             const SizedBox(height: 6),
             Text('${device.platform} · ${device.lastAddress}:${device.lastPort}'),
-            Text(memoryLabel, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                Chip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text(
+                    placement.label,
+                    style: TextStyle(color: placementColor, fontSize: 11),
+                  ),
+                  side: BorderSide(color: placementColor.withValues(alpha: 0.35)),
+                  backgroundColor: placementColor.withValues(alpha: 0.07),
+                ),
+              ],
+            ),
+            Text(
+              placement.resourceSummary,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             Text(
               'بصمة الجلسة: ${device.fingerprint}',
               style: Theme.of(context).textTheme.bodySmall,
@@ -1181,14 +1942,22 @@ class _DevicesPageState extends State<DevicesPage> {
                 if (connected)
                   TextButton.icon(
                     onPressed: () => _ping(device),
-                    icon: const Icon(Icons.network_ping_rounded, size: 18),
-                    label: const Text('اختبار الاتصال'),
+                    icon: const Icon(Icons.memory_rounded, size: 18),
+                    label: const Text('تحديث الموارد والاتصال'),
                   ),
                 if (!device.isBlocked)
                   TextButton.icon(
                     onPressed: _busy ? null : () => _shareTaskProposal(device),
                     icon: const Icon(Icons.outbox_rounded, size: 18),
                     label: const Text('إرسال مقترح مهمة'),
+                  ),
+                if (connected && !device.isBlocked &&
+                    device.capabilities['task_execution'] == true &&
+                    device.capabilities['task_execution_version'] == peerTaskExecutionVersion)
+                  FilledButton.tonalIcon(
+                    onPressed: _busy ? null : () => _sendRemoteStep(device),
+                    icon: const Icon(Icons.play_circle_outline_rounded, size: 18),
+                    label: const Text('تنفيذ خطوة على الجهاز'),
                   ),
                 TextButton.icon(
                   onPressed: () => _toggleBlock(device),

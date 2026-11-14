@@ -14,6 +14,7 @@ class CoreRuntimeCard extends StatefulWidget {
 
 class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
   late Future<CoreRuntimeStatus> _status;
+  bool _clearingMemory = false;
 
   @override
   void initState() {
@@ -23,6 +24,53 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
 
   void _retry() {
     setState(() => _status = widget.service.inspect());
+  }
+
+  Future<void> _clearContextMemory(CoreRuntimeStatus status) async {
+    if (_clearingMemory ||
+        !status.modelLoaded ||
+        !status.nativeContextLoaded ||
+        status.nativeGenerationActive) {
+      return;
+    }
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تفريغ KV Cache'),
+        content: const Text(
+          'سيتم مسح حالة KV المؤقتة فقط. ستظل أوزان النموذج وسياق التشغيل محمّلين، وقد يُعاد بناء KV عند الطلب التالي. هل تريد المتابعة؟',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('تفريغ KV Cache'),
+          ),
+        ],
+      ),
+    );
+    if (approved != true || !mounted) return;
+
+    setState(() => _clearingMemory = true);
+    try {
+      final result = await widget.service.clearContextMemory();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+      _retry();
+    } finally {
+      if (mounted) setState(() => _clearingMemory = false);
+    }
+  }
+
+  String _formatMemory(int bytes) {
+    if (bytes <= 0) return 'غير متاح';
+    final mib = bytes / (1024 * 1024);
+    return '${mib.toStringAsFixed(1)} MiB';
   }
 
   @override
@@ -98,6 +146,55 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                     value: '${status.modelContextTokens} رمز على CPU',
                   ),
                 _InfoLine(label: 'سجل الوكلاء', value: 'ذاكرة Rust مؤقتة'),
+                if (status.nativeMemoryAvailable) ...[
+                  const Divider(height: 22),
+                  Text(
+                    'دورة حياة الذاكرة الأصلية',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                  if (status.nativeMemoryReadable) ...[
+                    _InfoLine(
+                      label: 'ذاكرة العملية الحالية RSS',
+                      value: _formatMemory(status.nativeResidentBytes),
+                    ),
+                    _InfoLine(
+                      label: 'أعلى ذاكرة مسجلة HWM',
+                      value: _formatMemory(status.nativePeakResidentBytes),
+                    ),
+                    _InfoLine(
+                      label: 'الذاكرة الافتراضية',
+                      value: _formatMemory(status.nativeVirtualBytes),
+                    ),
+                  ] else
+                    Text(
+                      'قياسات RSS غير متاحة على هذا الجهاز؛ حالة جلسة النموذج ما زالت قابلة للقراءة.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  _InfoLine(
+                    label: 'حالة السياق الأصلي',
+                    value: status.nativeContextLoaded ? 'محمّل' : 'غير محمّل',
+                  ),
+                  _InfoLine(
+                    label: 'عمليات تنظيف KV',
+                    value: '${status.nativeKvCacheClearCount}',
+                  ),
+                  _InfoLine(
+                    label: 'تحميلات / تفريغات ناجحة',
+                    value: '${status.nativeModelLoadCount} / ${status.nativeModelUnloadCount}',
+                  ),
+                  _InfoLine(
+                    label: 'حالة التوليد',
+                    value: status.nativeGenerationActive ? 'نشط' : 'متوقف',
+                  ),
+                  Text(
+                    'RSS تشمل العملية كاملة، وقد لا تنخفض فور تحرير النموذج لأن مخصص الذاكرة قد يحتفظ بصفحات لإعادة استخدامها.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                  ),
+                ],
                 _InfoLine(
                   label: 'محرك llama.cpp',
                   value: status.nativeEngineAvailable
@@ -124,10 +221,35 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
+                if (status.nativeMemoryAvailable &&
+                    status.modelLoaded &&
+                    status.nativeContextLoaded)
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: (_clearingMemory || status.nativeGenerationActive)
+                          ? null
+                          : () => _clearContextMemory(status),
+                      icon: _clearingMemory
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cleaning_services_outlined),
+                      label: Text(
+                        status.nativeGenerationActive
+                            ? 'التوليد نشط؛ التفريغ غير متاح'
+                            : _clearingMemory
+                                ? 'جارٍ تفريغ KV Cache…'
+                                : 'تفريغ KV Cache المؤقت',
+                      ),
+                    ),
+                  ),
                 Align(
                   alignment: AlignmentDirectional.centerEnd,
                   child: TextButton.icon(
-                    onPressed: _retry,
+                    onPressed: _clearingMemory ? null : _retry,
                     icon: const Icon(Icons.refresh, size: 18),
                     label: const Text('إعادة الفحص'),
                   ),

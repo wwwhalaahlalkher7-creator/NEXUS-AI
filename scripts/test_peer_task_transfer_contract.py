@@ -29,9 +29,9 @@ checks = {
     "only one consent dialog per paired peer can be pending": "_pendingIncomingTaskPrompts.add(session.deviceId)" in service and "_pendingIncomingTaskPrompts.remove(session.deviceId)" in service,
     "paired and non-blocked state is rechecked before storing": service.count("repository.get(session.deviceId)") >= 2 and "أُزيل الاقتران أو حُظر الجهاز أثناء المراجعة" in service,
     "permanent rejection is not accidentally re-queued": "permanentlyRejected" in service and "status: permanentFailure ? 'rejected' : 'queued'" in service and "if (!permanentlyRejected)" in service,
-    "capabilities advertise transport without execution": "'task_transfer': true" in service and "'task_execution': false" in service,
+    "capabilities retain proposal transport while execution is dynamically gated": "'task_transfer': true" in service and "'task_execution': onPeerTaskExecutionApproval != null &&" in service and "onPeerTaskExecute != null" in service,
     "transport records are tied to paired-device lifecycle": "REFERENCES paired_devices(id) ON DELETE CASCADE" in manifest,
-    "SQLite v10 migration is included on create and upgrade": "static const _databaseVersion = 10" in manifest and "if (oldVersion < 10)" in manifest and "'declined', 'rejected'" in manifest,
+    "SQLite v11 import migration is included on create and upgrade": "static const _databaseVersion = 15" in manifest and "await _upgradeV11RemoteTaskImport(db);" in manifest and "if (oldVersion < 10)" in manifest and "if (oldVersion < 11)" in manifest and "'declined', 'rejected'" in manifest and "imported_task_id" in manifest,
     "UI refreshes on accepted, declined and rejected transfer outcomes": all(value in page for value in ("DeviceNetworkEventType.taskProposalReceived", "DeviceNetworkEventType.taskProposalSent", "DeviceNetworkEventType.taskProposalDeclined", "DeviceNetworkEventType.taskProposalRejected")),
 }
 failed = [name for name, passed in checks.items() if not passed]

@@ -27,6 +27,16 @@ pub struct RuntimeDiagnosticsDto {
     pub agent_registry: String,
     pub model_loaded: bool,
     pub model_context_tokens: Option<u32>,
+    pub native_memory_available: bool,
+    pub native_memory_readable: bool,
+    pub native_context_loaded: bool,
+    pub native_generation_active: bool,
+    pub native_resident_bytes: u64,
+    pub native_peak_resident_bytes: u64,
+    pub native_virtual_bytes: u64,
+    pub native_kv_cache_clear_count: u64,
+    pub native_model_load_count: u64,
+    pub native_model_unload_count: u64,
 }
 
 /// Result of a real native model load/unload operation.
@@ -35,6 +45,13 @@ pub struct ModelRuntimeOperationDto {
     pub success: bool,
     pub model_loaded: bool,
     pub context_tokens: u32,
+    pub message: String,
+}
+
+/// Outcome of clearing transient native KV cache without unloading the model.
+#[derive(Debug, Clone)]
+pub struct MemoryLifecycleOperationDto {
+    pub success: bool,
     pub message: String,
 }
 
@@ -71,6 +88,7 @@ pub fn get_core_info_for_app() -> CoreInfoDto {
 pub fn runtime_diagnostics() -> RuntimeDiagnosticsDto {
     let info = get_core_info();
     let native = nexus_runtime::native_engine_status();
+    let memory = nexus_runtime::native_memory_snapshot();
     RuntimeDiagnosticsDto {
         core_name: info.name.to_owned(),
         core_version: info.version.to_owned(),
@@ -90,6 +108,16 @@ pub fn runtime_diagnostics() -> RuntimeDiagnosticsDto {
         agent_registry: "rust_in_memory".to_owned(),
         model_loaded: native.model_loaded,
         model_context_tokens: native.context_tokens,
+        native_memory_available: memory.available,
+        native_memory_readable: memory.memory_readable,
+        native_context_loaded: memory.context_loaded,
+        native_generation_active: memory.generation_active,
+        native_resident_bytes: memory.resident_bytes,
+        native_peak_resident_bytes: memory.peak_resident_bytes,
+        native_virtual_bytes: memory.virtual_bytes,
+        native_kv_cache_clear_count: memory.kv_cache_clear_count,
+        native_model_load_count: memory.model_load_count,
+        native_model_unload_count: memory.model_unload_count,
     }
 }
 
@@ -115,6 +143,15 @@ pub fn unload_gguf_model() -> ModelRuntimeOperationDto {
         success: result.success,
         model_loaded: result.model_loaded,
         context_tokens: result.context_tokens,
+        message: result.message,
+    }
+}
+
+/// Clears transient KV state while retaining model weights and context.
+pub fn clear_native_context_memory() -> MemoryLifecycleOperationDto {
+    let result = nexus_runtime::clear_native_context_memory();
+    MemoryLifecycleOperationDto {
+        success: result.success,
         message: result.message,
     }
 }
@@ -314,6 +351,10 @@ pub struct GgufInspectionDto {
     pub context_length: Option<u64>,
     pub block_count: Option<u64>,
     pub embedding_length: Option<u64>,
+    pub attention_head_count: Option<u64>,
+    pub attention_head_count_kv: Option<u64>,
+    pub attention_key_length: Option<u64>,
+    pub attention_value_length: Option<u64>,
     pub file_type: Option<u64>,
     pub parameter_count: Option<u64>,
     pub message: String,
@@ -335,6 +376,10 @@ pub fn inspect_gguf_model_file(path: String) -> GgufInspectionDto {
             context_length: info.metadata.context_length,
             block_count: info.metadata.block_count,
             embedding_length: info.metadata.embedding_length,
+            attention_head_count: info.metadata.attention_head_count,
+            attention_head_count_kv: info.metadata.attention_head_count_kv,
+            attention_key_length: info.metadata.attention_key_length,
+            attention_value_length: info.metadata.attention_value_length,
             file_type: info.metadata.file_type,
             parameter_count: info.metadata.parameter_count,
             message: "تم فحص GGUF؛ لم تُحمّل الأوزان.".to_owned(),
@@ -352,6 +397,10 @@ pub fn inspect_gguf_model_file(path: String) -> GgufInspectionDto {
             context_length: None,
             block_count: None,
             embedding_length: None,
+            attention_head_count: None,
+            attention_head_count_kv: None,
+            attention_key_length: None,
+            attention_value_length: None,
             file_type: None,
             parameter_count: None,
             message: error,
@@ -372,7 +421,7 @@ mod tests {
     fn bridge_api_returns_core_metadata() {
         let info = get_core_info_for_app();
         assert_eq!(info.name, "NEXUS AI");
-        assert_eq!(info.stage, "alpha-2.6.2-peer-task-transfer");
+        assert_eq!(info.stage, "alpha-2.7.6-explainable-placement");
     }
 
     #[test]
@@ -381,10 +430,16 @@ mod tests {
         assert!(diagnostics.bridge_connected);
         assert!(!diagnostics.inference_available);
         assert!(!diagnostics.model_loaded);
-        assert_eq!(diagnostics.stage, "alpha-2.6.2-peer-task-transfer");
+        assert_eq!(diagnostics.stage, "alpha-2.7.6-explainable-placement");
         assert_eq!(diagnostics.model_registry, "flutter_sqlite");
         #[cfg(not(target_os = "android"))]
-        assert!(!diagnostics.inference_available);
+        {
+            assert!(!diagnostics.inference_available);
+            assert!(!diagnostics.native_memory_available);
+            assert!(!diagnostics.native_memory_readable);
+            assert!(!diagnostics.native_context_loaded);
+            assert!(!diagnostics.native_generation_active);
+        }
     }
 
     #[test]
@@ -394,6 +449,16 @@ mod tests {
         {
             assert!(!result.success);
             assert!(!result.model_loaded);
+            assert!(result.message.contains("Android"));
+        }
+    }
+
+    #[test]
+    fn host_memory_clear_fails_without_claiming_native_resources_were_released() {
+        let result = clear_native_context_memory();
+        #[cfg(not(target_os = "android"))]
+        {
+            assert!(!result.success);
             assert!(result.message.contains("Android"));
         }
     }

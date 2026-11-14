@@ -181,8 +181,22 @@ jobs:
           python3 scripts/test_peer_discovery_contract.py
           python3 scripts/test_peer_task_transfer_migration.py
           python3 scripts/test_peer_task_transfer_contract.py
+          python3 scripts/test_peer_task_import_contract.py
+          python3 scripts/test_peer_task_execution_migration.py
+          python3 scripts/test_peer_task_execution_contract.py
+          python3 scripts/test_peer_resource_advisor_contract.py
+          python3 scripts/test_explainable_placement_contract.py
+          python3 scripts/test_privacy_center_contract.py
+          python3 scripts/test_device_telemetry_contract.py
+          python3 scripts/test_model_fit_migration.py
+          python3 scripts/test_model_fit_contract.py
+          python3 scripts/test_adaptive_inference_policy_contract.py
+          python3 scripts/test_memory_lifecycle_contract.py
+          python3 scripts/test_benchmark_migration.py
+          python3 scripts/test_benchmark_contract.py
           python3 scripts/test_pub_dependency_compat.py
           python3 scripts/test_android_manifest_patch.py
+          python3 scripts/test_android_telemetry_patch.py
 
       - name: Ensure cached Flutter Rust Bridge build tools
         shell: bash
@@ -248,6 +262,9 @@ jobs:
 
       - name: Add Android local-network permissions
         run: python3 scripts/patch_android_manifest.py
+
+      - name: Add Android battery and thermal telemetry channel
+        run: python3 scripts/patch_android_telemetry.py
 
       - name: Build llama.cpp native adapter for Android ARM64
         shell: bash

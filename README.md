@@ -1,6 +1,68 @@
-# NEXUS AI — Alpha 2.6.2: Peer task proposal transport
+# NEXUS AI — Alpha 2.8.0: Local privacy center
 
-## Alpha 2.6.2 — Encrypted task proposal transport
+## Alpha 2.8.0 — Local privacy center (`2.8.0+59`)
+
+Implemented in source; Flutter/Dart CI, Android ARM64 compilation, and physical-device acceptance remain required. Add a Privacy & Local Data screen with a user-selected JSON export and individually confirmed deletion of conversation history, indexed knowledge, task/peer-transfer ledgers, and benchmark history. Export includes user-created content and model metadata, but strips local model paths and excludes model binaries, device identity settings, paired-device addresses/fingerprints, peer transfer/execution ledgers, and secure-storage secrets. Only the resource-mode preference is exported from local settings. Export format v1 is a plaintext data snapshot, not a restorable full-app backup; JSON import/restore is not part of this milestone. The current save path materializes the snapshot in app memory and may not suit very large databases on low-RAM phones. Deletion refuses active message streams and active local/peer executions. Clearing these sections preserves GGUF files, model catalog, agents, pairings/secrets and app preferences. SQLite remains v15 and Rust ABI remains 2.6.2; no database migration or external dependency was added.
+
+See `docs/development/ALPHA_2_8_0_LOCAL_PRIVACY_CENTER.md`.
+
+---
+
+## Alpha 2.7.4 — Native memory lifecycle (`2.7.4+56`)
+
+Implemented in source; Flutter/Rust/FRB/Android CI and physical-device acceptance remain required. Generation now uses an explicit scoped KV reset guard on entry and every exit path. Session teardown clears transient KV while the context is alive, then frees the context before the model. A user-confirmed, non-blocking maintenance action can clear only the transient KV state while retaining model weights and the context; it refuses to run while generation owns the native session. Native diagnostics report lifecycle flags/counters and `/proc/self/status` RSS, peak RSS and virtual size. RSS is whole-process memory, not a llama.cpp-only allocation figure, and may remain high after `free()` because the allocator can retain pages. No database migration or third-party dependency was added; two additive native C ABI symbols are included.
+
+See `docs/development/ALPHA_2_7_4_MEMORY_LIFECYCLE.md` and preceding Alpha 2.7 documents.
+
+---
+
+## Previous milestone — Alpha 2.7.3: Adaptive inference policy
+
+## Alpha 2.7.3 — Adaptive inference policy (`2.7.3+55`)
+
+Implemented in source; Flutter/Dart CI, Android ARM64 compilation, and physical-device acceptance remain required. NEXUS now derives a suggested inference context and CPU thread count from a fresh GGUF inspection, the current RAM/CPU/battery/thermal snapshot, and the selected Balanced/Performance/Unrestricted mode. The suggested context is evaluated with the Alpha 2.7.2 model-fit estimator. Balanced mode prefers a fitting context no greater than 2048 tokens; Performance can use the largest fitting context up to the native 4096-token ceiling; Unrestricted may recommend the largest model-supported context while clearly showing fit warnings. CPU thread suggestions respect the current native maximum of eight. Balanced/Performance reduce their suggestions under high CPU load, critical thermal status, or critically low battery while unplugged; Unrestricted never silently derates and instead surfaces warnings.
+
+The Models page now offers a review dialog where users can change the recommended context and CPU threads before applying them. The selected values are passed explicitly to `ModelRuntimeManager.prepare` or `switchTo`. A failed switch restores the previous model with its previous thread count. Reconfiguring an already loaded model requires explicit confirmation and performs a controlled unload/reload. Insufficient estimated memory requires a second acknowledgement; the native llama.cpp live preflight remains authoritative. No SQLite migration, Rust ABI change, model metadata change, or third-party dependency was added.
+
+See `docs/development/ALPHA_2_7_3_ADAPTIVE_INFERENCE_POLICY.md` and the preceding Alpha 2.7.2/2.7.1 documents.
+
+## Previous milestone — Alpha 2.7.2: GGUF model-fit estimator
+
+## Alpha 2.7.2 — Model-fit estimation (`2.7.2+54`)
+
+Implemented in source; GitHub Actions, Android ARM64 compilation, and physical-device acceptance remain required. GGUF inspection now extracts architecture-specific attention head counts and per-head K/V dimensions when present. SQLite v14 stores those optional fields while preserving older model records. Before loading an installed model, the Models page can verify the local GGUF file and estimate weight residency, KV-cache memory for a selected context, and runtime reserve against the device's current available RAM.
+
+The estimator uses exact GGUF K/V dimensions when available. If the metadata is incomplete but the architecture is a recognized attention-transformer family, it uses full embedding width for K and V as a conservative multi-head upper-bound fallback. Unsupported/state-space architectures or inconsistent metadata return an unknown result rather than a fabricated fit verdict. The estimate shows a minimum, recommended planning threshold, and upper planning threshold with explicit F16 and memory-margin assumptions. Changing context in the estimator changes the estimate only; it does not silently change runtime settings or an active session.
+
+The estimator is advisory. The native llama.cpp loader still performs its own live `/proc/meminfo` preflight and remains authoritative. This estimate is not a guarantee of successful allocation and does not yet predict quantized KV types, backend-specific allocator fragmentation, mmap residency, or device thermal throttling. No third-party dependency or C ABI change was introduced; the Rust-to-Dart metadata DTO is regenerated by the existing FRB workflow.
+
+See `docs/development/ALPHA_2_7_2_MODEL_FIT_ESTIMATOR.md`, `docs/development/ALPHA_2_7_1_DEVICE_TELEMETRY.md`, and `docs/development/ALPHA_2_7_0_PEER_RESOURCE_AWARENESS.md`.
+
+## Previous milestone — Alpha 2.6.5: Authenticated peer execution, local consent and result return (`2.6.5+51`)
+
+Implemented in source; GitHub Actions, Android ARM64 build, and physical two-device acceptance remain required. The app now negotiates `task_execution` only while the receiving device has its Devices screen open and both local approval and local execution handlers are configured. A sender can dispatch one ready task step through the authenticated AES-256-GCM peer channel. The receiver validates the versioned SHA-256 envelope, stores it idempotently, asks the user to choose a ready local agent and approve this exact request, executes through that device's installed local llama.cpp model, persists a terminal result before attempting delivery, and returns the result to the sender. The sender correlates the result with the paired device and source step, then stores the remote output in its local task ledger and acknowledges the exact result digest. SQLite v13 records that acknowledgement so the receiver only replays terminal results until the sender confirms durable receipt.
+
+Outgoing steps are single-dispatch while active; a local task run is atomically refused while any outbound step for that task is queued, awaiting approval, approved or running. Incoming executions are serialized across peers because each app currently owns one model session. Cancellation is cooperative and results remain in SQLite for reconnect delivery until an authenticated result acknowledgement is committed. Process restart moves an interrupted execution to `interrupted` rather than silently re-running a model generation. Request bodies and result bodies remain within 512 KiB; no model files, agent prompts, shell commands, arbitrary code, tools or remote file access are transferred.
+
+This milestone enables one-step remote execution, **not distributed inference or automatic whole-plan orchestration**. Each remote step requires user approval on the receiving device and a user-selected ready local agent. The receiver must have the Devices screen open when a new request is offered and approved; execution is foreground-only and is not advertised as a background service. Saved terminal results are retried on reconnect until an authenticated acknowledgement confirms the exact result digest. Real two-device testing is still required before treating the feature as production-ready.
+
+See `docs/development/ALPHA_2_6_5_REMOTE_EXECUTION_INTEGRATION.md`.
+
+## Previous milestone — Alpha 2.6.4: Distributed execution protocol foundation (`2.6.4+49`)
+
+Alpha 2.6.4 established the versioned request/result envelopes, SHA-256 integrity, 15-minute expiry, bounded dependency outputs and durable SQLite v12 execution ledger. It defined the compare-and-set state machine and process-restart recovery. It did not yet dispatch requests through the network or call the local model executor; those integrations are the Alpha 2.6.5 additions.
+
+See `docs/development/ALPHA_2_6_4_EXECUTION_PROTOCOL_FOUNDATION.md`.
+
+## Previous milestone — Alpha 2.6.3: Approved peer task import
+
+Source milestone prepared; GitHub Actions, Android ARM64 build, and physical-device acceptance are still required.
+
+An incoming proposal that was already approved for storage can now be imported as a local planned task. The user must explicitly map every remote agent identifier to a ready local agent; remote names, personas, prompts, model assignments, and other device metadata are never imported as executable identities. The app re-validates the mapped plan and dependency graph locally, then commits the new `agent_tasks`, pending `agent_task_steps`, provenance event, and source-transfer reference in one SQLite transaction. SQLite schema v11 adds a nullable `imported_task_id` foreign key so repeated import attempts return the same task ID instead of creating duplicates. Deleting the local task clears that reference, allowing a deliberate re-import later. Import does not start generation. The task remains `planned` until the user opens Agents → Tasks and explicitly reviews and runs it on this device. The peer capability continues to advertise `task_execution=false`; remote execution, remote cancellation, result routing and distributed inference are not enabled in this release.
+
+See `docs/development/ALPHA_2_6_3_APPROVED_TASK_IMPORT.md`.
+
+## Previous milestone — Alpha 2.6.2: Encrypted task proposal transport
 
 Explicitly paired devices can now exchange durable task proposals through their existing AES-256-GCM sequenced peer channel. Outgoing proposals are written to a local SQLite outbox before network send, correlate acknowledgements by transfer ID, and remain queued for a later reconnect if delivery is interrupted. The receiver validates the envelope and SHA-256 payload digest, checks the plan structure and dependency DAG, then asks the user to approve or reject that specific proposal before storage. The approval dialog expires after 60 seconds; no decision leaves the sender's outbox queued for retry. An approved proposal is committed locally as `kept` before the positive acknowledgement is sent; an explicit rejection is also persisted as `declined`, so duplicate deliveries replay the same decision without reopening the prompt. Exact duplicate delivery is idempotent; reuse of an ID with different data is rejected. A rejected or permanently invalid proposal is not retried automatically. Keeping a proposal does not import remote agents, execute steps, transfer model files or enable distributed inference. The current proposal frame payload ceiling is 512 KiB to stay below the encrypted 1 MiB frame envelope; file attachments and chunked transfer are future work. SQLite schema v10 adds the durable inbox/outbox.
 
@@ -126,9 +188,10 @@ GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles th
 
 The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-Flutter package version: `2.6.2+47`; Rust workspace version: `2.6.2`. SQLite database version: `10` (includes local resource settings, knowledge library, orchestration tables, paired devices, and durable peer task inbox/outbox). The inference message bubble syntax was corrected so `SelectableText` keeps its `textDirection` and `style` named arguments inside the constructor call. Flutter verification fixes also normalize invitation expiry to UTC, make empty inference state scrollable in short layouts, migrate resources to `RadioGroup`, and explicitly block device-page flow control, and provide a non-null RadioGroup callback that ignores changes while a resource-mode save is in progress. The `file_picker` dependency is pinned to the compatible v12 API line (`^12.3.0`) so its Windows implementation can resolve `win32` 6 alongside `flutter_secure_storage ^11.2.0`.
+Flutter package version: `2.7.6+58`; Rust workspace version: `2.6.2` (no breaking native ABI change; two additive symbols were added for memory diagnostics and KV maintenance). SQLite database version: `15` (includes local resource settings, knowledge library, orchestration tables, paired devices, durable peer task inbox/outbox, idempotent local task-import references, the durable distributed-execution ledger, and optional GGUF attention dimensions for model-fit estimation). The inference message bubble syntax was corrected so `SelectableText` keeps its `textDirection` and `style` named arguments inside the constructor call. Flutter verification fixes also normalize invitation expiry to UTC, make empty inference state scrollable in short layouts, migrate resources to `RadioGroup`, and explicitly block device-page flow control, and provide a non-null RadioGroup callback that ignores changes while a resource-mode save is in progress. The `file_picker` dependency is pinned to the compatible v12 API line (`^12.3.0`) so its Windows implementation can resolve `win32` 6 alongside `flutter_secure_storage ^11.2.0`.
 
-See `docs/development/ALPHA_2_6_2_PEER_TASK_TRANSFER.md`,
+See `docs/development/ALPHA_2_6_4_EXECUTION_PROTOCOL_FOUNDATION.md`,
+`docs/development/ALPHA_2_6_2_PEER_TASK_TRANSFER.md`,
 `docs/development/ALPHA_2_6_1_NETWORK_DISCOVERY_QR.md`,
 `docs/development/ALPHA_2_6_LOCAL_DEVICE_NETWORKING.md`,
 `docs/development/ALPHA_2_5_MULTI_AGENT_ORCHESTRATION.md`,
@@ -366,3 +429,47 @@ The host C ABI contract test uses a fake llama API and verifies multi-role templ
 - Alpha 2.4.0 initially shipped conservative per-file, library, candidate, result, and prompt quotas. Alpha 2.4.1 supersedes those fixed application quotas with the selected resource profile: Balanced and Performance use memory-aware budgets, while Unrestricted removes the artificial importer and retrieval pre-budgets.
 - Documents are split into overlapping 1,200-character chunks with a 160-character overlap. Original source files are not copied into the app database; text chunks and normalized search forms are stored locally.
 - Local text excerpts are untrusted data. Tool instructions found inside a source are never executed.
+
+
+## Alpha 2.7.5 — Local benchmark harness (`2.7.5+57`)
+
+Implemented in source; Dart/Flutter CI, Rust/FRB integration, Android ARM64 build, and physical-device performance acceptance remain required.
+
+- Add a local benchmark page reachable from the model library. It requires an installed GGUF model, an idle runtime session, and explicit user confirmation before loading or generating.
+- Measure the first app-managed load and a repeat load separately. The repeat load may benefit from the operating-system page cache; Android cannot reliably flush that cache without elevated privileges, so the UI does not call it a guaranteed cold-cache measurement. The effective loaded context and thread count returned by the runtime are persisted rather than merely echoing requested values.
+- Run a short warm-up excluded from throughput, then two measured generation passes. Compute tokens/second from the actual stream token counts and elapsed wall time, not requested output length.
+- Run a separate cancellation probe. Record cancellation latency only when the native cancellation request is accepted and the stream reaches its terminal cancelled event; otherwise leave the metric unavailable.
+- Sample process-wide RSS high-water mark, thermal status, battery level, and runtime version around load/generation phases. RSS is labelled the process lifetime VmHWM since app start, not a per-benchmark or model-only peak; thermal/battery values stay unknown when the OS does not expose them.
+- Persist provenance and results locally in SQLite schema v15: model identity/name/architecture/file size, context, CPU threads, first/repeat load times, generation elapsed time/token count/throughput, process VmHWM lifetime watermark, cancellation observation/latency, thermal/battery endpoints, runtime version, status, and failure detail.
+- Release the generation lease and attempt to unload the benchmark model after terminal stream completion. On a generation timeout, request native cancellation and wait up to 30 seconds for a terminal event. If no terminal event arrives, retain the generation lease and skip unload to avoid freeing a context that native code may still use; the UI instructs the user to restart the app.
+- Keep benchmark history after deleting a model catalog entry by using a soft model identifier rather than a foreign key.
+- Add Dart metric/record round-trip tests and host Python migration/source-contract checks to CI.
+
+Not included: root-only cold page-cache control, background thermal polling, GPU benchmarks, multi-device comparative benchmark orchestration, or automatic model/peer placement. Physical-device runs are still required to characterize sustained thermal behaviour and measurement repeatability.
+
+See `docs/development/ALPHA_2_7_5_BENCHMARK_HARNESS.md`.
+
+## Alpha 2.7.6 — Explainable peer placement (`2.7.6+58`)
+
+Implemented in source; Flutter/Rust CI, Android ARM64 build, and physical two-device acceptance remain pending.
+
+- Advertise a privacy-minimized inventory of GGUF metadata signatures assigned to ready local agents. The capability snapshot contains no local model IDs, names, paths, or tensor contents; peers can compare metadata profiles without receiving the catalog itself.
+- Verify that each advertised model record is still installed and its local path exists with the recorded file size before publishing its profile. Inventory versioning is additive and does not require a SQLite migration or a breaking peer-protocol version bump.
+- Build a stable compatibility signature from architecture, file size, context length, layer count, embedding length, attention dimensions, file type, and parameter count. This is a metadata compatibility key, not a cryptographic hash of model weights or proof that tensor contents are identical.
+- Add `PeerExecutionPlacementAdvisor.rankForModel` to assess a selected installed GGUF model and context against each peer's fresh RAM, CPU occupancy, thermal state, battery, single-session occupancy, and ready-agent model-profile inventory.
+- Run the existing model-fit estimator against each peer's reported available RAM. Separate likely-fit, tight-fit, insufficient-memory, model-unavailable, unknown-inventory, stale, busy, unsupported, offline, and blocked states.
+- Rank first by model fit and memory headroom, then by measured CPU load, thermal status, battery, and logical cores. Attach human-readable reasons and memory figures to each recommendation.
+- Add a device-page flow to select a local verified GGUF model and context, then view an explainable ranked list. The recommendation dialog does not dispatch a task; device selection remains manual and the receiver must still choose a local ready agent and explicitly approve execution.
+- Add Dart unit tests for matching profiles, missing/legacy inventories, tight fit warnings, insufficient memory, and ranking. Add a host-side source contract to CI. Preserve SQLite schema v15 and Rust ABI 2.6.2.
+
+Important limitation: profile matching compares GGUF metadata only, not tensor contents. A candidate's estimate is conditional on its advertised ready agent still using a model with that profile; actual native memory preflight and receiver approval remain authoritative. Physical two-device acceptance is required before treating placement recommendations as operationally reliable.
+
+See `docs/development/ALPHA_2_7_6_EXPLAINABLE_PLACEMENT.md`.
+
+## Exact remaining work after Alpha 2.8.0
+
+1. **Beta acceptance:** run clean-install/upgrade/migration, low-storage/low-memory, offline, background/process-death, restore, RTL/LTR, accessibility, long-session, repeated load/unload, cancellation, thermal-soak, and benchmark-repeatability tests. Review JSON export contents/redaction and document a restore/import strategy. Validate model-specific peer placement with at least two physical Android devices, including stale telemetry, model inventory mismatch, low-memory rejection, receiver approval, result acknowledgement, reconnect, and process-restart recovery.
+2. **Release CI and native build:** from a clean GitHub Actions run, pass Dart format/analyze/test, Rust fmt/test/clippy, FRB generation, pinned llama.cpp Android NDK compilation for `arm64-v8a`, and Debug APK packaging. Fix every failure before scope freeze.
+3. **Release APK:** build and sign the `arm64-v8a` Release APK (not AAB), verify signing certificate/package/version/native libraries and upgrade path, then publish APK, SHA-256, release notes, and installation/recovery guidance.
+
+Historical scope note for Alpha 2.7.0: resource telemetry, model fit, adaptive inference, memory lifecycle, benchmarks, and explainable placement were split into follow-on milestones. Alpha 2.7.1–2.7.6 are implemented in source; CI and physical-device acceptance remain pending.

@@ -112,4 +112,33 @@ void main() {
       throwsA(isA<PeerTaskTransferException>()),
     );
   });
+  test('remapper replaces every remote agent with a selected local agent', () {
+    final remapped = RemoteTaskPlanRemapper.remap(
+      jsonEncode(validPlan),
+      const {'researcher': 'local-research', 'writer': 'local-writer'},
+    );
+    final decoded = jsonDecode(remapped) as Map<String, dynamic>;
+    final steps = decoded['steps'] as List<dynamic>;
+    expect((steps[0] as Map<String, dynamic>)['agent_id'], 'local-research');
+    expect((steps[1] as Map<String, dynamic>)['agent_id'], 'local-writer');
+    expect(decoded['goal'], validPlan['goal']);
+  });
+
+  test('remapper rejects any remote agent without an explicit mapping', () {
+    expect(
+      () => RemoteTaskPlanRemapper.remap(
+        jsonEncode(validPlan),
+        const {'researcher': 'local-research'},
+      ),
+      throwsA(isA<PeerTaskTransferException>()),
+    );
+  });
+
+  test('remapper rejects malformed plan envelopes', () {
+    expect(
+      () => RemoteTaskPlanRemapper.remap('{not-json', const {}),
+      throwsA(isA<PeerTaskTransferException>()),
+    );
+  });
+
 }

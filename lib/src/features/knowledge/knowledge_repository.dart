@@ -13,7 +13,7 @@ class KnowledgeRepository {
     DeviceResourceMonitor? resourceMonitor,
   })  : _localDatabase = database ?? LocalDatabase.instance,
         _settingsRepository = settingsRepository ?? ResourceSettingsRepository(),
-        _resourceMonitor = resourceMonitor ?? const DeviceResourceMonitor();
+        _resourceMonitor = resourceMonitor ?? DeviceResourceMonitor();
 
   final LocalDatabase _localDatabase;
   final ResourceSettingsRepository _settingsRepository;

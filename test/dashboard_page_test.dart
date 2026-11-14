@@ -11,10 +11,14 @@ class _FakeCoreRuntimeService implements CoreRuntimeService {
   const _FakeCoreRuntimeService();
 
   @override
+  Future<MemoryLifecycleResult> clearContextMemory() async =>
+      const MemoryLifecycleResult(success: false, message: 'unavailable');
+
+  @override
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '1.9.5',
-        stage: 'alpha-2.6.2-peer-task-transfer',
+        stage: 'alpha-2.7.6-explainable-placement',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',
         inferenceAvailable: false,

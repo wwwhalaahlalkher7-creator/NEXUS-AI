@@ -18,6 +18,10 @@ class ModelRecord {
     this.contextLength,
     this.blockCount,
     this.embeddingLength,
+    this.attentionHeadCount,
+    this.attentionHeadCountKv,
+    this.attentionKeyLength,
+    this.attentionValueLength,
     this.fileType,
     this.parameterCount,
   });
@@ -34,6 +38,10 @@ class ModelRecord {
   final int? contextLength;
   final int? blockCount;
   final int? embeddingLength;
+  final int? attentionHeadCount;
+  final int? attentionHeadCountKv;
+  final int? attentionKeyLength;
+  final int? attentionValueLength;
   final int? fileType;
   final int? parameterCount;
   final int createdAtUnixMs;
@@ -52,6 +60,10 @@ class ModelRecord {
         'context_length': contextLength,
         'block_count': blockCount,
         'embedding_length': embeddingLength,
+        'attention_head_count': attentionHeadCount,
+        'attention_head_count_kv': attentionHeadCountKv,
+        'attention_key_length': attentionKeyLength,
+        'attention_value_length': attentionValueLength,
         'file_type': fileType,
         'parameter_count': parameterCount,
         'created_at_unix_ms': createdAtUnixMs,
@@ -72,6 +84,10 @@ class ModelRecord {
       contextLength: map['context_length'] as int?,
       blockCount: map['block_count'] as int?,
       embeddingLength: map['embedding_length'] as int?,
+      attentionHeadCount: map['attention_head_count'] as int?,
+      attentionHeadCountKv: map['attention_head_count_kv'] as int?,
+      attentionKeyLength: map['attention_key_length'] as int?,
+      attentionValueLength: map['attention_value_length'] as int?,
       fileType: map['file_type'] as int?,
       parameterCount: map['parameter_count'] as int?,
       createdAtUnixMs: map['created_at_unix_ms']! as int,

@@ -61,6 +61,16 @@ pub fn generate_native_text(
     )
 }
 
+/// Reports native process memory and model/KV lifecycle counters.
+pub fn native_memory_snapshot() -> native::engine::NativeMemorySnapshot {
+    native::engine::native_memory_snapshot()
+}
+
+/// Clears transient KV cache while retaining model weights and context.
+pub fn clear_native_context_memory() -> native::engine::NativeMemoryOperation {
+    native::engine::clear_native_context_memory()
+}
+
 /// Requests cancellation without waiting for the native generation session lock.
 pub fn cancel_native_generation() -> bool {
     native::engine::cancel_native_generation()
@@ -70,7 +80,7 @@ pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-2.6.2-peer-task-transfer",
+        stage: "alpha-2.7.6-explainable-placement",
     }
 }
 
@@ -116,7 +126,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-2.6.2-peer-task-transfer");
+        assert_eq!(get_core_info().stage, "alpha-2.7.6-explainable-placement");
     }
 
     #[test]

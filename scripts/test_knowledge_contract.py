@@ -84,7 +84,7 @@ checks = {
         and "maxMessages: _resourceSettings.maxConversationMessages" in chat
     ),
     "runtime reports the current Alpha milestone": (
-        'stage: "alpha-2.6.2-peer-task-transfer"' in runtime
+        'stage: "alpha-2.7.6-explainable-placement"' in runtime
     ),
 }
 

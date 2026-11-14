@@ -19,7 +19,7 @@ class KnowledgeImportService {
     DeviceResourceMonitor? resourceMonitor,
   })  : _filePicker = filePicker ?? _pickPlatformFile,
         _settingsRepository = settingsRepository ?? ResourceSettingsRepository(),
-        _resourceMonitor = resourceMonitor ?? const DeviceResourceMonitor();
+        _resourceMonitor = resourceMonitor ?? DeviceResourceMonitor();
 
   final KnowledgeFilePicker _filePicker;
   final ResourceSettingsRepository _settingsRepository;

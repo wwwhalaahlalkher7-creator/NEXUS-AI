@@ -70,6 +70,10 @@ void main() {
       contextLength: 4096,
       blockCount: 32,
       embeddingLength: 2048,
+      attentionHeadCount: 32,
+      attentionHeadCountKv: 8,
+      attentionKeyLength: 64,
+      attentionValueLength: 64,
       fileType: 15,
       parameterCount: 3000000000,
     );
@@ -83,6 +87,10 @@ void main() {
     expect(restored.contextLength, 4096);
     expect(restored.blockCount, 32);
     expect(restored.embeddingLength, 2048);
+    expect(restored.attentionHeadCount, 32);
+    expect(restored.attentionHeadCountKv, 8);
+    expect(restored.attentionKeyLength, 64);
+    expect(restored.attentionValueLength, 64);
     expect(restored.parameterCount, 3000000000);
   });
 }

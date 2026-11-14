@@ -14,6 +14,7 @@ import 'features/runtime/rust_model_runtime_backend.dart';
 import 'features/resources/resource_settings_page.dart';
 import 'features/devices/device_network_service.dart';
 import 'features/devices/devices_page.dart';
+import 'features/privacy/privacy_center_page.dart';
 
 class NexusHomePage extends StatefulWidget {
   const NexusHomePage({super.key, this.runtimeService});
@@ -81,7 +82,7 @@ class _NexusHomePageState extends State<NexusHomePage> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => DevicesPage(service: _deviceNetworkService),
+                  builder: (_) => DevicesPage(service: _deviceNetworkService, runtimeManager: _modelRuntimeManager),
                 ),
               );
             },
@@ -97,6 +98,17 @@ class _NexusHomePageState extends State<NexusHomePage> {
               );
             },
             icon: const Icon(Icons.settings_outlined),
+          ),
+          IconButton(
+            tooltip: 'الخصوصية والبيانات المحلية',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const PrivacyCenterPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.privacy_tip_outlined),
           ),
         ],
       ),

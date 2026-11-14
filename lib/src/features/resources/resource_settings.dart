@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../data/local_database.dart';
@@ -148,20 +149,58 @@ class ResourceSnapshot {
   const ResourceSnapshot({
     required this.availableMemoryBytes,
     this.totalMemoryBytes,
+    this.cpuLogicalCores = 1,
+    this.cpuUtilizationPercent,
+    this.batteryLevelPercent,
+    this.isCharging,
+    this.thermalStatus,
   });
 
   final int availableMemoryBytes;
   final int? totalMemoryBytes;
+  final int cpuLogicalCores;
+  final int? cpuUtilizationPercent;
+  final int? batteryLevelPercent;
+  final bool? isCharging;
+  /// Android PowerManager thermal status (0..6); null when unavailable.
+  final int? thermalStatus;
 }
 
-/// Android exposes MemAvailable through procfs. Failure is non-fatal: policy
-/// falls back to conservative profiles, while unrestricted mode keeps no
-/// artificial application-level ceiling.
-class DeviceResourceMonitor {
-  const DeviceResourceMonitor();
+typedef CpuStatReader = Future<List<String>> Function();
+typedef PowerThermalReader = Future<Map<String, Object?>?> Function();
+typedef TelemetryDelay = Future<void> Function(Duration duration);
 
-  Future<ResourceSnapshot?> readSnapshot() async {
-    if (!Platform.isAndroid && !Platform.isLinux) return null;
+/// Android/Linux expose RAM and aggregate CPU counters through procfs.
+/// Battery and thermal readings use the generated Android host's platform
+/// channel. Unsupported metrics remain null; no synthetic values are used.
+class DeviceResourceMonitor {
+  DeviceResourceMonitor({
+    CpuStatReader? cpuStatReader,
+    PowerThermalReader? powerThermalReader,
+    TelemetryDelay? delay,
+  })  : _cpuStatReader = cpuStatReader ?? _readCpuStat,
+        _powerThermalReader = powerThermalReader ?? _readPowerThermal,
+        _delay = delay ?? ((duration) => Future<void>.delayed(duration));
+
+  static const MethodChannel _powerChannel =
+      MethodChannel('com.nexusai/device_telemetry');
+  final CpuStatReader _cpuStatReader;
+  final PowerThermalReader _powerThermalReader;
+  final TelemetryDelay _delay;
+
+  Future<ResourceSnapshot?> readSnapshot({
+    bool includeExtendedTelemetry = false,
+  }) async {
+    final cpuLogicalCores = Platform.numberOfProcessors.clamp(1, 256).toInt();
+    if (!Platform.isAndroid && !Platform.isLinux) {
+      return ResourceSnapshot(
+        availableMemoryBytes: 0,
+        cpuLogicalCores: cpuLogicalCores,
+      );
+    }
+
+    var availableBytes = 0;
+    int? totalBytes;
     try {
       final content = await File('/proc/meminfo').readAsString();
       int? readKilobytes(String key) {
@@ -175,15 +214,95 @@ class DeviceResourceMonitor {
               (readKilobytes('Buffers') ?? 0) +
               (readKilobytes('Cached') ?? 0));
       final totalKb = readKilobytes('MemTotal');
-      if (availableKb <= 0) return null;
+      if (availableKb > 0) availableBytes = availableKb * 1024;
+      if (totalKb != null && totalKb > 0) totalBytes = totalKb * 1024;
+    } on Object {
+      // Keep optional measurements unknown if procfs is unavailable.
+    }
+
+    if (!includeExtendedTelemetry) {
       return ResourceSnapshot(
-        availableMemoryBytes: availableKb * 1024,
-        totalMemoryBytes: totalKb == null ? null : totalKb * 1024,
+        availableMemoryBytes: availableBytes,
+        totalMemoryBytes: totalBytes,
+        cpuLogicalCores: cpuLogicalCores,
       );
+    }
+
+    final cpuUtilization = await _sampleCpuUtilization();
+    final power = await _readPowerSafely();
+    final chargingValue = power?['is_charging'];
+    final charging = chargingValue is bool ? chargingValue : null;
+    return ResourceSnapshot(
+      availableMemoryBytes: availableBytes,
+      totalMemoryBytes: totalBytes,
+      cpuLogicalCores: cpuLogicalCores,
+      cpuUtilizationPercent: cpuUtilization,
+      batteryLevelPercent: _boundedInt(power?['battery_level_percent'], 0, 100),
+      isCharging: charging,
+      thermalStatus: _boundedInt(power?['thermal_status'], 0, 6),
+    );
+  }
+
+  Future<int?> _sampleCpuUtilization() async {
+    if (!Platform.isAndroid && !Platform.isLinux) return null;
+    try {
+      final before = _parseAggregateCpu(await _cpuStatReader());
+      if (before == null) return null;
+      await _delay(const Duration(milliseconds: 400));
+      final after = _parseAggregateCpu(await _cpuStatReader());
+      if (after == null) return null;
+      final totalDelta = after.total - before.total;
+      final idleDelta = after.idle - before.idle;
+      if (totalDelta <= 0 || idleDelta < 0 || idleDelta > totalDelta) {
+        return null;
+      }
+      final busy = totalDelta - idleDelta;
+      return ((busy * 100) / totalDelta).round().clamp(0, 100).toInt();
     } on Object {
       return null;
     }
   }
+
+  static _CpuCounters? _parseAggregateCpu(List<String> lines) {
+    if (lines.isEmpty) return null;
+    final parts = lines.first.trim().split(RegExp(r'\s+'));
+    if (parts.length < 5 || parts.first != 'cpu') return null;
+    final values = <int>[];
+    for (final value in parts.skip(1).take(8)) {
+      final parsed = int.tryParse(value);
+      if (parsed == null || parsed < 0) return null;
+      values.add(parsed);
+    }
+    if (values.length < 4) return null;
+    final total = values.fold<int>(0, (sum, value) => sum + value);
+    final idle = values[3] + (values.length > 4 ? values[4] : 0);
+    return _CpuCounters(total: total, idle: idle);
+  }
+
+  Future<Map<String, Object?>?> _readPowerSafely() async {
+    try {
+      return await _powerThermalReader();
+    } on Object {
+      return null;
+    }
+  }
+
+  static Future<Map<String, Object?>?> _readPowerThermal() async {
+    if (!Platform.isAndroid) return null;
+    return _powerChannel.invokeMapMethod<String, Object?>('readPowerThermal');
+  }
+
+  static Future<List<String>> _readCpuStat() async =>
+      File('/proc/stat').readAsLines();
+
+  static int? _boundedInt(Object? value, int minimum, int maximum) =>
+      value is int && value >= minimum && value <= maximum ? value : null;
+}
+
+class _CpuCounters {
+  const _CpuCounters({required this.total, required this.idle});
+  final int total;
+  final int idle;
 }
 
 class ResourceSettingsRepository {

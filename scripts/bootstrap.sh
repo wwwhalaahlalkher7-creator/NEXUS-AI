@@ -20,6 +20,7 @@ fi
 
 # Keep local Android permissions aligned with the CI-generated scaffold.
 python3 scripts/patch_android_manifest.py
+python3 scripts/patch_android_telemetry.py
 
 echo "Integrating Flutter Rust Bridge and resolving dependencies..."
 bash scripts/integrate_bridge.sh

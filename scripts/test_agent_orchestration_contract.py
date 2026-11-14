@@ -15,6 +15,8 @@ checks = {
     "topological dependency ordering": "ordered.add(step)" in plan,
     "shared task cancellation": "AgentTaskCancellationToken" in runner,
     "step reservation prevents duplicate execution": "_repository.startStep(taskId, step.stepKey)" in runner,
+    "local task run is atomically excluded while peer steps are active": "_repository.beginTaskRun(taskId)" in runner and "peer_task_executions" in (ROOT / "lib/src/features/orchestration/agent_task_repository.dart").read_text(encoding="utf-8"),
+    "terminal failed and blocked steps are not re-reserved on resume": "priorStatus == AgentTaskStepStatus.failed" in runner and "priorStatus == AgentTaskStepStatus.blocked" in runner,
     "dependency outputs are explicit handoffs": "AgentTaskDependencyOutput" in runner,
     "sequential single-session execution": "await _executor.execute" in runner,
     "model-switch routing": "_runtimeManager.switchTo(target)" in executor,

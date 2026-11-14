@@ -10,3 +10,7 @@ rust_builder/
 
 # Rust build outputs
 target/
+
+# Python contract test artifacts
+__pycache__/
+*.py[cod]

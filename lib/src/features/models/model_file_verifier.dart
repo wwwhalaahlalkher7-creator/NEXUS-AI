@@ -8,11 +8,13 @@ class ModelFileVerification {
     required this.isValid,
     required this.message,
     this.actualSizeBytes,
+    this.inspection,
   });
 
   final bool isValid;
   final String message;
   final int? actualSizeBytes;
+  final GgufInspection? inspection;
 }
 
 abstract interface class ModelFileVerifier {
@@ -67,6 +69,7 @@ class LocalModelFileVerifier implements ModelFileVerifier {
     return ModelFileVerification(
       isValid: true,
       actualSizeBytes: actualSize,
+      inspection: inspection,
       message: 'الملف موجود، والحجم مطابق، واجتاز فحص الترويسة والبيانات الوصفية. لم يتم فحص أوزان الموترات أو اختبار تشغيل النموذج.',
     );
   }

@@ -140,7 +140,11 @@ class AgentTaskOrchestrator {
       final outputByKey = <String, AgentTaskStepRecord>{
         for (final step in steps) step.stepKey: step,
       };
-      await _repository.setTaskStatus(taskId, AgentTaskStatus.running);
+      if (!await _repository.beginTaskRun(taskId)) {
+        throw StateError(
+          'توجد خطوة مُرسلة إلى جهاز آخر أو تغيّرت حالة المهمة؛ انتظر النتيجة قبل التشغيل المحلي.',
+        );
+      }
       await _repository.appendEvent(
         taskId: taskId,
         eventType: 'execution_started',
@@ -153,6 +157,18 @@ class AgentTaskOrchestrator {
         final priorStatus = statusByKey[step.stepKey]!;
         if (priorStatus == AgentTaskStepStatus.succeeded) {
           succeeded++;
+          continue;
+        }
+        if (priorStatus == AgentTaskStepStatus.failed) {
+          failed++;
+          continue;
+        }
+        if (priorStatus == AgentTaskStepStatus.blocked) {
+          blocked++;
+          continue;
+        }
+        if (priorStatus == AgentTaskStepStatus.cancelled) {
+          cancelled++;
           continue;
         }
         final failedDependency = step.dependsOn.any((dependency) {

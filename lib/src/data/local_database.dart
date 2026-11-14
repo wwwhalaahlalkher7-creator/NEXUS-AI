@@ -6,7 +6,7 @@ class LocalDatabase {
 
   static final LocalDatabase instance = LocalDatabase._();
   static const _databaseName = 'nexus_local.db';
-  static const _databaseVersion = 10;
+  static const _databaseVersion = 15;
 
   Database? _database;
 
@@ -33,6 +33,11 @@ class LocalDatabase {
         await _createV8OrchestrationTables(db);
         await _createV9PairedDeviceTables(db);
         await _createV10TaskTransferTables(db);
+        await _upgradeV11RemoteTaskImport(db);
+        await _createV12PeerTaskExecutionTable(db);
+        await _upgradeV13PeerTaskResultAcknowledgement(db);
+        await _upgradeV14ModelAttentionMetadata(db);
+        await _createV15BenchmarkRuns(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -61,6 +66,21 @@ class LocalDatabase {
         }
         if (oldVersion < 10) {
           await _createV10TaskTransferTables(db);
+        }
+        if (oldVersion < 11) {
+          await _upgradeV11RemoteTaskImport(db);
+        }
+        if (oldVersion < 12) {
+          await _createV12PeerTaskExecutionTable(db);
+        }
+        if (oldVersion < 13) {
+          await _upgradeV13PeerTaskResultAcknowledgement(db);
+        }
+        if (oldVersion < 14) {
+          await _upgradeV14ModelAttentionMetadata(db);
+        }
+        if (oldVersion < 15) {
+          await _createV15BenchmarkRuns(db);
         }
       },
     );
@@ -370,5 +390,129 @@ Future<void> _createV10TaskTransferTables(DatabaseExecutor db) async {
   await db.execute(
     'CREATE INDEX idx_remote_task_transfers_direction_status '
     'ON remote_task_transfers(direction, status, updated_at_unix_ms DESC)',
+  );
+}
+
+
+/// Tracks the local task created from an approved peer proposal. The nullable
+/// reference makes import idempotent while allowing a deleted local task to be
+/// imported again deliberately.
+Future<void> _upgradeV11RemoteTaskImport(DatabaseExecutor db) async {
+  await db.execute(
+    'ALTER TABLE remote_task_transfers ADD COLUMN imported_task_id TEXT '
+    'REFERENCES agent_tasks(id) ON DELETE SET NULL',
+  );
+  await db.execute(
+    'CREATE INDEX idx_remote_task_transfers_imported_task '
+    'ON remote_task_transfers(imported_task_id)',
+  );
+}
+
+
+/// Durable ledger for authenticated peer execution requests, local approval,
+/// execution outcomes and reconnect recovery.
+Future<void> _createV12PeerTaskExecutionTable(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE peer_task_executions (
+      execution_id TEXT PRIMARY KEY NOT NULL,
+      device_id TEXT NOT NULL REFERENCES paired_devices(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL CHECK(direction IN ('outgoing', 'incoming')),
+      status TEXT NOT NULL CHECK(status IN (
+        'queued', 'awaiting_approval', 'approved', 'running',
+        'succeeded', 'failed', 'cancelled', 'rejected', 'interrupted'
+      )),
+      source_task_id TEXT NOT NULL,
+      source_step_key TEXT NOT NULL,
+      local_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      request_json TEXT NOT NULL,
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64),
+      result_json TEXT,
+      result_sha256 TEXT CHECK(result_sha256 IS NULL OR length(result_sha256) = 64),
+      error TEXT,
+      created_at_unix_ms INTEGER NOT NULL,
+      updated_at_unix_ms INTEGER NOT NULL,
+      expires_at_unix_ms INTEGER NOT NULL CHECK(expires_at_unix_ms > created_at_unix_ms),
+      UNIQUE(device_id, direction, execution_id)
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX idx_peer_task_executions_device_status '
+    'ON peer_task_executions(device_id, status, updated_at_unix_ms DESC)',
+  );
+  await db.execute(
+    'CREATE INDEX idx_peer_task_executions_direction_status '
+    'ON peer_task_executions(direction, status, updated_at_unix_ms DESC)',
+  );
+}
+
+
+/// Records when the originating peer has durably accepted a terminal result.
+/// Without this acknowledgement, a receiver would resend every stored result
+/// on every reconnect, even after the sender had already committed it.
+Future<void> _upgradeV13PeerTaskResultAcknowledgement(
+  DatabaseExecutor db,
+) async {
+  await db.execute(
+    'ALTER TABLE peer_task_executions '
+    'ADD COLUMN result_acknowledged_at_unix_ms INTEGER',
+  );
+  await db.execute(
+    'CREATE INDEX idx_peer_task_execution_result_ack '
+    'ON peer_task_executions(device_id, direction, result_acknowledged_at_unix_ms, updated_at_unix_ms DESC)',
+  );
+}
+
+
+/// Persists architecture-specific attention dimensions extracted from the
+/// verified GGUF metadata directory. Existing model records remain valid and
+/// are estimated with the documented conservative fallback when fields are
+/// absent.
+Future<void> _upgradeV14ModelAttentionMetadata(DatabaseExecutor db) async {
+  await db.execute('ALTER TABLE models ADD COLUMN attention_head_count INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN attention_head_count_kv INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN attention_key_length INTEGER');
+  await db.execute('ALTER TABLE models ADD COLUMN attention_value_length INTEGER');
+}
+
+
+/// Stores reproducible local model benchmark measurements. Model identifiers
+/// are intentionally soft references so history survives model-catalog deletion.
+Future<void> _createV15BenchmarkRuns(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE benchmark_runs (
+      id TEXT PRIMARY KEY NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      model_architecture TEXT,
+      model_file_bytes INTEGER,
+      context_tokens INTEGER NOT NULL CHECK(context_tokens >= 512),
+      cpu_threads INTEGER NOT NULL CHECK(cpu_threads BETWEEN 1 AND 8),
+      started_at_unix_ms INTEGER NOT NULL,
+      completed_at_unix_ms INTEGER NOT NULL,
+      first_load_ms INTEGER,
+      repeat_load_ms INTEGER,
+      generation_elapsed_ms INTEGER,
+      generated_tokens INTEGER NOT NULL DEFAULT 0 CHECK(generated_tokens >= 0),
+      tokens_per_second REAL,
+      peak_resident_bytes INTEGER,
+      cancel_latency_ms INTEGER,
+      cancellation_observed INTEGER NOT NULL DEFAULT 0 CHECK(cancellation_observed IN (0, 1)),
+      starting_thermal_status INTEGER,
+      ending_thermal_status INTEGER,
+      peak_thermal_status INTEGER,
+      starting_battery_percent INTEGER,
+      ending_battery_percent INTEGER,
+      runtime_version TEXT,
+      status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed')),
+      error TEXT
+    )
+  ''');
+  await db.execute(
+    'CREATE INDEX idx_benchmark_runs_completed '
+    'ON benchmark_runs(completed_at_unix_ms DESC)',
+  );
+  await db.execute(
+    'CREATE INDEX idx_benchmark_runs_model_completed '
+    'ON benchmark_runs(model_id, completed_at_unix_ms DESC)',
   );
 }

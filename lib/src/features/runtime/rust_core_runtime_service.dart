@@ -7,6 +7,29 @@ import 'core_runtime_status.dart';
 
 class RustCoreRuntimeService implements CoreRuntimeService {
   @override
+  Future<MemoryLifecycleResult> clearContextMemory() async {
+    if (!Platform.isAndroid) {
+      return const MemoryLifecycleResult(
+        success: false,
+        message: 'تفريغ KV Cache الأصلي متاح على Android فقط.',
+      );
+    }
+    try {
+      await RustBridgeInitializer.ensureInitialized();
+      final result = await rust_api.clearNativeContextMemory();
+      return MemoryLifecycleResult(
+        success: result.success,
+        message: result.message,
+      );
+    } catch (error) {
+      return MemoryLifecycleResult(
+        success: false,
+        message: 'تعذر تفريغ KV Cache: $error',
+      );
+    }
+  }
+
+  @override
   Future<CoreRuntimeStatus> inspect() async {
     // The first native target is Android. Avoid loading a Rust dynamic library
     // in Flutter widget tests and unsupported desktop targets.
@@ -40,6 +63,16 @@ class RustCoreRuntimeService implements CoreRuntimeService {
         nativeEngineVersion: diagnostics.nativeEngineVersion,
         nativeEngineMessage: diagnostics.nativeEngineMessage,
         modelContextTokens: diagnostics.modelContextTokens,
+        nativeMemoryAvailable: diagnostics.nativeMemoryAvailable,
+        nativeMemoryReadable: diagnostics.nativeMemoryReadable,
+        nativeContextLoaded: diagnostics.nativeContextLoaded,
+        nativeGenerationActive: diagnostics.nativeGenerationActive,
+        nativeResidentBytes: diagnostics.nativeResidentBytes,
+        nativePeakResidentBytes: diagnostics.nativePeakResidentBytes,
+        nativeVirtualBytes: diagnostics.nativeVirtualBytes,
+        nativeKvCacheClearCount: diagnostics.nativeKvCacheClearCount,
+        nativeModelLoadCount: diagnostics.nativeModelLoadCount,
+        nativeModelUnloadCount: diagnostics.nativeModelUnloadCount,
       );
     } catch (error) {
       // Keep diagnostics visible without crashing the dashboard.

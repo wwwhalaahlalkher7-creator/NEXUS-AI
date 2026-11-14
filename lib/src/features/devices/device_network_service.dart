@@ -8,13 +8,20 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../data/local_database.dart';
-import '../resources/resource_settings.dart';
+import '../agents/agent_record.dart';
+import '../agents/agent_repository.dart';
+import '../models/model_repository.dart';
+import '../resources/peer_model_profile.dart';
+import '../orchestration/agent_task_orchestrator.dart';
+import '../orchestration/agent_task_plan.dart';
 import '../orchestration/agent_task_repository.dart';
+import '../resources/resource_settings.dart';
 import 'device_record.dart';
 import 'device_repository.dart';
-import 'peer_protocol.dart';
 import 'peer_discovery.dart';
+import 'peer_protocol.dart';
 import 'peer_task_transfer.dart';
+import 'peer_task_execution.dart';
 
 class PairingInvite {
   const PairingInvite({
@@ -78,6 +85,10 @@ enum DeviceNetworkEventType {
   taskProposalSent,
   taskProposalDeclined,
   taskProposalRejected,
+  taskExecutionReceived,
+  taskExecutionStarted,
+  taskExecutionFinished,
+  taskExecutionUpdated,
   error,
 }
 
@@ -93,6 +104,31 @@ class DeviceNetworkEvent {
   final String? deviceId;
 }
 
+
+class PeerTaskExecutionApproval {
+  const PeerTaskExecutionApproval({
+    required this.accepted,
+    this.localAgentId,
+  });
+
+  final bool accepted;
+  final String? localAgentId;
+}
+
+class PeerTaskExecutionPrompt {
+  const PeerTaskExecutionPrompt({
+    required this.executionId,
+    required this.deviceId,
+    required this.displayName,
+    required this.request,
+  });
+
+  final String executionId;
+  final String deviceId;
+  final String displayName;
+  final PeerTaskExecutionRequest request;
+}
+
 class DeviceNetworkService {
   DeviceNetworkService({
     LocalDatabase? database,
@@ -101,7 +137,10 @@ class DeviceNetworkService {
   })  : _database = database ?? LocalDatabase.instance,
         _secureStorage = secureStorage ?? FlutterSecureStorage(),
         repository = repository ?? PairedDeviceRepository(database: database),
-        _transferRepository = RemoteTaskTransferRepository(database: database);
+        _agentRepository = AgentRepository(database: database),
+        _modelRepository = ModelRepository(database: database),
+        _transferRepository = RemoteTaskTransferRepository(database: database),
+        _executionRepository = PeerTaskExecutionRepository(database: database);
 
   static const int port = peerDefaultPort;
   static const int discoveryPort = peerDiscoveryPort;
@@ -119,9 +158,12 @@ class DeviceNetworkService {
   final LocalDatabase _database;
   final FlutterSecureStorage _secureStorage;
   final PairedDeviceRepository repository;
+  final AgentRepository _agentRepository;
+  final ModelRepository _modelRepository;
   final RemoteTaskTransferRepository _transferRepository;
+  final PeerTaskExecutionRepository _executionRepository;
   final AgentTaskRepository _taskRepository = AgentTaskRepository();
-  final DeviceResourceMonitor _resourceMonitor = const DeviceResourceMonitor();
+  final DeviceResourceMonitor _resourceMonitor = DeviceResourceMonitor();
   final StreamController<DeviceNetworkEvent> _events =
       StreamController<DeviceNetworkEvent>.broadcast();
   final Map<String, _PeerSession> _sessions = {};
@@ -129,6 +171,11 @@ class DeviceNetworkService {
   final Map<String, String> _pendingTaskAckDevices = {};
   final Set<String> _taskTransfersInFlight = {};
   final Set<String> _pendingIncomingTaskPrompts = {};
+  final Set<String> _pendingIncomingExecutionPrompts = {};
+  final Set<String> _pendingIncomingExecutionDevices = {};
+  final Map<String, AgentTaskCancellationToken> _activePeerExecutionTokens = {};
+  final Set<String> _cancelledIncomingExecutions = {};
+  final Set<String> _peerExecutionsInFlight = {};
   final Set<PeerFrameConnection> _pendingConnections = {};
   final Map<String, DiscoveredPeer> _discoveredPeers = {};
   final Map<String, DateTime> _validDiscoveryNonces = {};
@@ -155,8 +202,18 @@ class DeviceNetworkService {
   bool _disposed = false;
   int _listenerGeneration = 0;
   int _pendingHandshakes = 0;
+  ResourceSnapshot? _cachedResourceSnapshot;
+  DateTime? _cachedResourceSnapshotAt;
+  Future<ResourceSnapshot?>? _resourceSnapshotPending;
   Future<bool> Function(PeerPairingRequest request)? onPairingRequest;
   Future<bool?> Function(PeerTaskProposalRequest request)? onTaskProposalRequest;
+  Future<PeerTaskExecutionApproval?> Function(PeerTaskExecutionPrompt request)?
+      onPeerTaskExecutionApproval;
+  Future<String> Function({
+    required String localAgentId,
+    required PeerTaskExecutionRequest request,
+    required AgentTaskCancellationToken cancellationToken,
+  })? onPeerTaskExecute;
 
   Stream<DeviceNetworkEvent> get events => _events.stream;
   bool get isListening => _server != null;
@@ -173,8 +230,158 @@ class DeviceNetworkService {
   String? get localDeviceName => _localDeviceName;
   Set<String> get connectedDeviceIds => Set.unmodifiable(_sessions.keys);
 
+  void configurePeerExecutionHandlers({
+    required Future<PeerTaskExecutionApproval?> Function(
+      PeerTaskExecutionPrompt request,
+    ) approvalHandler,
+    required Future<String> Function({
+      required String localAgentId,
+      required PeerTaskExecutionRequest request,
+      required AgentTaskCancellationToken cancellationToken,
+    }) executeHandler,
+  }) {
+    onPeerTaskExecutionApproval = approvalHandler;
+    onPeerTaskExecute = executeHandler;
+    for (final deviceId in _sessions.keys) {
+      unawaited(_sendCapabilities(deviceId));
+    }
+  }
+
+  void clearPeerExecutionHandlers() {
+    onPeerTaskExecutionApproval = null;
+    onPeerTaskExecute = null;
+    for (final deviceId in _sessions.keys) {
+      unawaited(_sendCapabilities(deviceId));
+    }
+  }
+
+  Future<List<PeerTaskExecutionRecord>> listPeerTaskExecutions() =>
+      _executionRepository.list();
+
+  Future<void> cancelLocalPeerExecution(String executionId) async {
+    final record = await _executionRepository.get(executionId);
+    if (record == null || record.direction != 'incoming' ||
+        record.status != PeerTaskExecutionStatus.running) {
+      throw const PeerTaskExecutionException('لا يوجد تنفيذ محلي جارٍ بهذا المعرّف.');
+    }
+    final token = _activePeerExecutionTokens[executionId];
+    if (token == null) {
+      throw const PeerTaskExecutionException('لم يعد التنفيذ نشطاً أو أنه في طور الإنهاء.');
+    }
+    token.cancel();
+  }
+
+  Future<void> sendTaskStepForRemoteExecution({
+    required String deviceId,
+    required String taskId,
+    required String stepKey,
+  }) async {
+    final device = await repository.get(deviceId);
+    if (device == null || device.isBlocked) {
+      throw const PeerProtocolException('الجهاز غير موجود أو محظور.');
+    }
+    if (device.capabilities['task_execution'] != true ||
+        device.capabilities['task_execution_version'] != peerTaskExecutionVersion) {
+      throw const PeerProtocolException(
+        'الجهاز المقابل لا يؤكد دعم تنفيذ الخطوات. افتح شاشة الأجهزة على الطرفين ثم أعد الاتصال.',
+      );
+    }
+    final task = await _taskRepository.get(taskId);
+    if (task == null || !{'planned', 'interrupted'}.contains(task.status.name)) {
+      throw const PeerTaskExecutionException(
+        'يمكن إرسال خطوة من مهمة مخططة أو متوقفة فقط.',
+      );
+    }
+    final steps = await _taskRepository.steps(taskId);
+    AgentTaskStepRecord? selected;
+    for (final step in steps) {
+      if (step.stepKey == stepKey) selected = step;
+    }
+    if (selected == null ||
+        !{'pending', 'interrupted'}.contains(selected.status.name)) {
+      throw const PeerTaskExecutionException(
+        'الخطوة غير موجودة أو ليست جاهزة للإرسال.',
+      );
+    }
+    final byKey = {for (final step in steps) step.stepKey: step};
+    final localAgents = await AgentRepository().list();
+    final agentNames = {for (final agent in localAgents) agent.id: agent.name};
+    final dependencies = <PeerTaskDependencyResult>[];
+    for (final dependencyId in selected.dependsOn) {
+      final dependency = byKey[dependencyId];
+      if (dependency == null || dependency.status != AgentTaskStepStatus.succeeded) {
+        throw const PeerTaskExecutionException(
+          'لا يمكن إرسال الخطوة قبل اكتمال جميع اعتمادياتها محلياً.',
+        );
+      }
+      dependencies.add(PeerTaskDependencyResult(
+        stepId: dependency.stepKey,
+        agentName: agentNames[dependency.agentId] ?? 'وكيل محلي سابق',
+        output: dependency.outputText,
+      ));
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final request = await PeerTaskExecutionRequest.create(
+      executionId: _randomToken(24),
+      sourceTaskId: task.id,
+      sourceStepId: selected.stepKey,
+      goal: task.goal,
+      objective: selected.objective,
+      expectedOutput: selected.expectedOutput,
+      dependencies: dependencies,
+      createdAtUnixMs: now,
+      expiresAtUnixMs: now + peerTaskExecutionRequestLifetime.inMilliseconds,
+    );
+    await _executionRepository.createOutgoing(
+      deviceId: deviceId,
+      request: request,
+      sourceTaskId: task.id,
+      sourceStepKey: selected.stepKey,
+    );
+    if (_sessions.containsKey(deviceId)) {
+      await _deliverPeerExecution(deviceId, request.executionId);
+    }
+    _events.add(DeviceNetworkEvent(
+      type: DeviceNetworkEventType.taskExecutionUpdated,
+      deviceId: deviceId,
+      message: 'حُفظ طلب تنفيذ الخطوة في سجل الإرسال.',
+    ));
+  }
+
+  Future<void> cancelRemoteExecution(String executionId) async {
+    final record = await _executionRepository.get(executionId);
+    if (record == null || record.direction != 'outgoing') {
+      throw const PeerTaskExecutionException('طلب التنفيذ الصادر غير موجود.');
+    }
+    final session = _sessions[record.deviceId];
+    if (record.status == PeerTaskExecutionStatus.queued) {
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: PeerTaskExecutionStatus.queued,
+        to: PeerTaskExecutionStatus.cancelled,
+        error: 'ألغى المستخدم الطلب قبل إرساله.',
+      );
+      _events.add(const DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        message: 'أُلغي طلب التنفيذ قبل إرساله.',
+      ));
+      return;
+    }
+    if (session == null) {
+      throw const PeerProtocolException('اتصل بالجهاز المقابل لإرسال طلب الإلغاء.');
+    }
+    await session.channel.send({
+      'kind': 'task_execution_cancel',
+      'version': peerTaskExecutionVersion,
+      'execution_id': executionId,
+    });
+  }
+
   Future<void> initialize() async {
-    await (_initialization ??= _loadIdentity().then<void>((_) {}));
+    await (_initialization ??= _loadIdentity().then<void>((_) async {
+      await _executionRepository.recoverRunningAsInterrupted();
+      await _reconcileStoredRemoteResults();
+    }));
   }
 
   Future<String> _loadIdentity() async {
@@ -881,6 +1088,14 @@ class DeviceNetworkService {
   Future<List<RemoteTaskTransferRecord>> listTaskTransfers() =>
       _transferRepository.list();
 
+  Future<String> importTaskProposal({
+    required String transferId,
+    required AgentTaskPlan locallyMappedPlan,
+  }) => _transferRepository.importIncomingAsLocalTask(
+        transferId: transferId,
+        plan: locallyMappedPlan,
+      );
+
   Future<void> reviewTaskTransfer(String transferId, {required bool keep}) =>
       _transferRepository.reviewIncoming(transferId, keep: keep);
 
@@ -1155,6 +1370,7 @@ class DeviceNetworkService {
     ));
     unawaited(_consume(session));
     unawaited(_flushQueuedTaskTransfers(deviceId));
+    unawaited(_flushQueuedPeerExecutions(deviceId));
   }
 
   Future<void> _consume(_PeerSession session) async {
@@ -1173,6 +1389,13 @@ class DeviceNetworkService {
                 capabilities['task_transfer_version'] == peerTaskTransferVersion) {
               unawaited(_flushQueuedTaskTransfers(session.deviceId));
             }
+            if (capabilities['task_execution'] == true &&
+                capabilities['task_execution_version'] == peerTaskExecutionVersion) {
+              unawaited(_flushQueuedPeerExecutions(session.deviceId));
+            }
+            if (capabilities['task_execution_version'] == peerTaskExecutionVersion) {
+              unawaited(_flushPeerExecutionResults(session.deviceId));
+            }
             _events.add(DeviceNetworkEvent(
               type: DeviceNetworkEventType.capabilitiesUpdated,
               deviceId: session.deviceId,
@@ -1180,6 +1403,7 @@ class DeviceNetworkService {
             ));
           }
         } else if (kind == 'ping') {
+          await _sendCapabilities(session.deviceId);
           await session.channel.send({
             'kind': 'pong',
             'sent_at_unix_ms': message['sent_at_unix_ms'],
@@ -1203,6 +1427,18 @@ class DeviceNetworkService {
               completer.complete(message);
             }
           }
+        } else if (kind == 'task_execution_request') {
+          unawaited(_handleIncomingPeerExecution(session, message));
+        } else if (kind == 'task_execution_ack') {
+          await _handlePeerExecutionAck(session, message);
+        } else if (kind == 'task_execution_result') {
+          await _handlePeerExecutionResult(session, message);
+        } else if (kind == 'task_execution_result_ack') {
+          await _handlePeerExecutionResultAck(session, message);
+        } else if (kind == 'task_execution_cancel') {
+          await _handlePeerExecutionCancel(session, message);
+        } else if (kind == 'task_execution_cancel_ack') {
+          await _handlePeerExecutionCancelAck(session, message);
         } else {
           _events.add(DeviceNetworkEvent(
             type: DeviceNetworkEventType.error,
@@ -1241,30 +1477,910 @@ class DeviceNetworkService {
     }
   }
 
+  Future<void> _flushQueuedPeerExecutions(String deviceId) async {
+    if (_disposed || !_sessions.containsKey(deviceId) ||
+        !_peerExecutionsInFlight.add('flush:$deviceId')) return;
+    try {
+      final device = await repository.get(deviceId);
+      if (device == null || device.isBlocked ||
+          device.capabilities['task_execution'] != true ||
+          device.capabilities['task_execution_version'] != peerTaskExecutionVersion) {
+        return;
+      }
+      final records = await _executionRepository.list(
+        direction: 'outgoing',
+        deviceId: deviceId,
+      );
+      for (final record in records.where(
+        (item) => item.status == PeerTaskExecutionStatus.queued ||
+            item.status == PeerTaskExecutionStatus.awaitingApproval,
+      )) {
+        if (!_sessions.containsKey(deviceId)) return;
+        try {
+          await _deliverPeerExecution(deviceId, record.executionId);
+        } on Object catch (error) {
+          _events.add(DeviceNetworkEvent(
+            type: DeviceNetworkEventType.error,
+            deviceId: deviceId,
+            message: 'تعذر إعادة إرسال طلب التنفيذ المحفوظ: $error',
+          ));
+          return;
+        }
+      }
+    } finally {
+      _peerExecutionsInFlight.remove('flush:$deviceId');
+    }
+  }
+
+  Future<void> _deliverPeerExecution(String deviceId, String executionId) async {
+    final session = _sessions[deviceId];
+    if (session == null || !_peerExecutionsInFlight.add(executionId)) return;
+    try {
+      final record = await _executionRepository.get(executionId);
+      if (record == null || record.direction != 'outgoing' ||
+          (record.status != PeerTaskExecutionStatus.queued &&
+              record.status != PeerTaskExecutionStatus.awaitingApproval)) return;
+      late final PeerTaskExecutionRequest request;
+      try {
+        request = await PeerTaskExecutionRequest.fromMessage(
+          (jsonDecode(record.requestJson) as Map).cast<String, Object?>(),
+        );
+      } on Object catch (error) {
+        final current = await _executionRepository.get(executionId);
+        final from = current?.status;
+        if (from == PeerTaskExecutionStatus.queued ||
+            from == PeerTaskExecutionStatus.awaitingApproval) {
+          await _executionRepository.transition(
+            executionId: executionId,
+            from: from!,
+            to: PeerTaskExecutionStatus.rejected,
+            error: 'انتهت صلاحية الطلب أو تعذر التحقق منه: $error',
+          );
+        }
+        _events.add(DeviceNetworkEvent(
+          type: DeviceNetworkEventType.taskExecutionUpdated,
+          deviceId: deviceId,
+          message: 'لم يُرسل طلب التنفيذ لأن صلاحيته انتهت أو بياناته غير صالحة.',
+        ));
+        return;
+      }
+      if (record.status == PeerTaskExecutionStatus.queued) {
+        await _executionRepository.transition(
+          executionId: executionId,
+          from: PeerTaskExecutionStatus.queued,
+          to: PeerTaskExecutionStatus.awaitingApproval,
+        );
+      }
+      try {
+        await session.channel.send(request.toMessage());
+        _events.add(DeviceNetworkEvent(
+          type: DeviceNetworkEventType.taskExecutionUpdated,
+          deviceId: deviceId,
+          message: 'أُرسل طلب تنفيذ ${record.sourceStepKey} وينتظر موافقة الجهاز الآخر.',
+        ));
+      } on Object catch (error) {
+        final current = await _executionRepository.get(executionId);
+        if (current?.status == PeerTaskExecutionStatus.awaitingApproval) {
+          await _executionRepository.transition(
+            executionId: executionId,
+            from: PeerTaskExecutionStatus.awaitingApproval,
+            to: PeerTaskExecutionStatus.queued,
+            error: error.toString(),
+          );
+        }
+        rethrow;
+      }
+    } finally {
+      _peerExecutionsInFlight.remove(executionId);
+    }
+  }
+
+  Future<void> _handleIncomingPeerExecution(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final rawId = message['execution_id'];
+    try {
+      final paired = await repository.get(session.deviceId);
+      if (paired == null || paired.isBlocked) {
+        throw const PeerTaskExecutionException('الجهاز غير مقترن أو محظور.');
+      }
+      final peerCapabilities = paired.capabilities;
+      if (peerCapabilities['task_execution'] != true ||
+          peerCapabilities['task_execution_version'] != peerTaskExecutionVersion) {
+        throw const PeerTaskExecutionException('الجهاز المرسل لا يعلن دعم بروتوكول التنفيذ.');
+      }
+      final request = await PeerTaskExecutionRequest.fromMessage(message);
+      final inserted = await _executionRepository.storeIncoming(
+        deviceId: session.deviceId,
+        request: request,
+      );
+      if (inserted) {
+        _events.add(DeviceNetworkEvent(
+          type: DeviceNetworkEventType.taskExecutionReceived,
+          deviceId: session.deviceId,
+          message: 'وصل طلب تنفيذ خطوة من ${session.displayName} وينتظر قرارك.',
+        ));
+      }
+      var record = await _executionRepository.get(request.executionId);
+      if (record == null) throw const PeerTaskExecutionException('تعذر حفظ طلب التنفيذ.');
+      if (!inserted) {
+        if (record.status == PeerTaskExecutionStatus.rejected ||
+            record.status == PeerTaskExecutionStatus.interrupted ||
+            (record.status == PeerTaskExecutionStatus.cancelled &&
+                record.resultJson == null)) {
+          await _sendExecutionAck(
+            session,
+            request.executionId,
+            accepted: false,
+            retryable: false,
+            message: record.error ?? 'سبق إنهاء طلب التنفيذ؛ أنشئ طلباً جديداً عند الحاجة.',
+          );
+          return;
+        }
+        if (record.status == PeerTaskExecutionStatus.running ||
+            record.status == PeerTaskExecutionStatus.approved) {
+          await _sendExecutionAck(
+            session,
+            request.executionId,
+            accepted: true,
+            retryable: false,
+            status: record.status.wireName,
+            message: 'طلب التنفيذ محفوظ ويجري التعامل معه بالفعل.',
+          );
+          return;
+        }
+        if (record.status == PeerTaskExecutionStatus.succeeded ||
+            record.status == PeerTaskExecutionStatus.failed ||
+            record.status == PeerTaskExecutionStatus.cancelled) {
+          if (record.resultJson != null) {
+            await _sendExecutionAck(
+              session,
+              request.executionId,
+              accepted: true,
+              retryable: false,
+              status: record.status.wireName,
+              message: 'سبق التعامل مع طلب التنفيذ؛ النتيجة النهائية محفوظة على الجهاز.',
+            );
+            if (record.resultAcknowledgedAtUnixMs == null) {
+              try {
+                await _sendStoredExecutionResult(session, record);
+              } on Object catch (error) {
+                _events.add(DeviceNetworkEvent(
+                  type: DeviceNetworkEventType.taskExecutionUpdated,
+                  deviceId: session.deviceId,
+                  message: 'تعذر إعادة إرسال النتيجة المحفوظة؛ ستتم المحاولة عند إعادة الاتصال: $error',
+                ));
+              }
+            }
+          } else {
+            await _sendExecutionAck(
+              session,
+              request.executionId,
+              accepted: false,
+              retryable: false,
+              message: record.error ?? 'سبق إنهاء طلب التنفيذ دون نتيجة قابلة للاستعادة.',
+            );
+          }
+          return;
+        }
+      }
+      if (!_pendingIncomingExecutionPrompts.add(request.executionId)) {
+        await _sendExecutionAck(
+          session,
+          request.executionId,
+          accepted: false,
+          retryable: true,
+          message: 'طلب التنفيذ قيد المراجعة بالفعل.',
+        );
+        return;
+      }
+      // This app currently owns one llama.cpp model session. Serialize the
+      // whole approval + execution lifecycle across all peers, not merely per
+      // peer, so two devices cannot race the same native runtime.
+      if (_pendingIncomingExecutionDevices.isNotEmpty ||
+          !_pendingIncomingExecutionDevices.add(session.deviceId)) {
+        _pendingIncomingExecutionPrompts.remove(request.executionId);
+        await _sendExecutionAckBestEffort(
+          session,
+          request.executionId,
+          accepted: false,
+          retryable: true,
+          message: 'المحرك المحلي مشغول بطلب آخر؛ أعد المحاولة لاحقاً.',
+        );
+        return;
+      }
+      _refreshConnectedPeerCapabilities();
+      try {
+        final approvalHandler = onPeerTaskExecutionApproval;
+        final executeHandler = onPeerTaskExecute;
+        if (approvalHandler == null || executeHandler == null) {
+          await _sendExecutionAck(
+            session,
+            request.executionId,
+            accepted: false,
+            retryable: true,
+            message: 'افتح شاشة الأجهزة على الجهاز المستلم للموافقة على التنفيذ.',
+          );
+          return;
+        }
+        final decision = await approvalHandler(PeerTaskExecutionPrompt(
+          executionId: request.executionId,
+          deviceId: session.deviceId,
+          displayName: session.displayName,
+          request: request,
+        )).timeout(const Duration(seconds: 60), onTimeout: () => null);
+        final latestRecord = await _executionRepository.get(request.executionId);
+        if (latestRecord == null ||
+            latestRecord.status != PeerTaskExecutionStatus.awaitingApproval) {
+          await _sendExecutionAckBestEffort(
+            session,
+            request.executionId,
+            accepted: false,
+            retryable: false,
+            message: 'أُلغي الطلب أو تغيرت حالته قبل الموافقة.',
+          );
+          return;
+        }
+        if (decision == null) {
+          await _sendExecutionAckBestEffort(
+            session,
+            request.executionId,
+            accepted: false,
+            retryable: true,
+            message: 'انتهت مهلة انتظار الموافقة؛ لم يبدأ التنفيذ.',
+          );
+          return;
+        }
+        if (!decision.accepted) {
+          await _executionRepository.transition(
+            executionId: request.executionId,
+            from: PeerTaskExecutionStatus.awaitingApproval,
+            to: PeerTaskExecutionStatus.rejected,
+            error: 'رفض المستخدم تنفيذ الخطوة على هذا الجهاز.',
+          );
+          await _sendExecutionAckBestEffort(
+            session,
+            request.executionId,
+            accepted: false,
+            retryable: false,
+            message: 'رفض المستخدم تنفيذ الخطوة.',
+          );
+          _events.add(DeviceNetworkEvent(
+            type: DeviceNetworkEventType.taskExecutionUpdated,
+            deviceId: session.deviceId,
+            message: 'رفض المستخدم طلب التنفيذ الوارد.',
+          ));
+          return;
+        }
+        final localAgentId = decision.localAgentId;
+        if (localAgentId == null || localAgentId.trim().isEmpty) {
+          throw const PeerTaskExecutionException('لم يتم اختيار وكيل محلي لتنفيذ الخطوة.');
+        }
+        final stillPaired = await repository.get(session.deviceId);
+        if (stillPaired == null || stillPaired.isBlocked ||
+            !identical(_sessions[session.deviceId], session)) {
+          throw const PeerTaskExecutionException('تغيرت حالة الجهاز قبل بدء التنفيذ.');
+        }
+        await _executionRepository.transition(
+          executionId: request.executionId,
+          from: PeerTaskExecutionStatus.awaitingApproval,
+          to: PeerTaskExecutionStatus.approved,
+          localAgentId: localAgentId,
+        );
+        await _executionRepository.transition(
+          executionId: request.executionId,
+          from: PeerTaskExecutionStatus.approved,
+          to: PeerTaskExecutionStatus.running,
+        );
+        final cancellation = AgentTaskCancellationToken();
+        _activePeerExecutionTokens[request.executionId] = cancellation;
+        // An authenticated cancel can arrive in the small interval between
+        // the durable running transition and token registration.
+        if (_cancelledIncomingExecutions.remove(request.executionId)) {
+          cancellation.cancel();
+        }
+        await _sendExecutionAckBestEffort(
+          session,
+          request.executionId,
+          accepted: true,
+          retryable: false,
+          status: 'running',
+          message: 'وافق المستخدم واختار وكيلاً محلياً؛ بدأ التنفيذ على هذا الجهاز.',
+        );
+        _events.add(DeviceNetworkEvent(
+          type: DeviceNetworkEventType.taskExecutionStarted,
+          deviceId: session.deviceId,
+          message: 'بدأ تنفيذ خطوة واردة باستخدام وكيل محلي.',
+        ));
+
+        PeerTaskExecutionResult result;
+        try {
+          cancellation.throwIfCancelled();
+          final output = await executeHandler(
+            localAgentId: localAgentId,
+            request: request,
+            cancellationToken: cancellation,
+          );
+          cancellation.throwIfCancelled();
+          result = await PeerTaskExecutionResult.create(
+            executionId: request.executionId,
+            outcome: 'succeeded',
+            outputText: output,
+            completedAtUnixMs: DateTime.now().millisecondsSinceEpoch,
+          );
+        } on AgentTaskCancelledException {
+          result = await PeerTaskExecutionResult.create(
+            executionId: request.executionId,
+            outcome: 'cancelled',
+            outputText: '',
+            error: 'أُلغي التنفيذ من الجهاز المنسّق أو المستخدم المحلي.',
+            completedAtUnixMs: DateTime.now().millisecondsSinceEpoch,
+          );
+        } on Object catch (error) {
+          final wasCancelled = cancellation.isCancelled;
+          result = await PeerTaskExecutionResult.create(
+            executionId: request.executionId,
+            outcome: wasCancelled ? 'cancelled' : 'failed',
+            outputText: '',
+            error: wasCancelled
+                ? 'أُلغي التنفيذ قبل اكتمال استجابة المحرك.'
+                : _boundedExecutionError(error),
+            completedAtUnixMs: DateTime.now().millisecondsSinceEpoch,
+          );
+        }
+        // Persist the terminal result before attempting network delivery. A
+        // send failure must never be misreported as a model-execution failure
+        // or overwrite the already committed result with a different digest.
+        await _executionRepository.storeResult(result: result);
+        await _sendExecutionResultBestEffort(session, result);
+        _events.add(DeviceNetworkEvent(
+          type: DeviceNetworkEventType.taskExecutionFinished,
+          deviceId: session.deviceId,
+          message: switch (result.outcome) {
+            'succeeded' => 'اكتمل التنفيذ المحلي وحُفظت النتيجة لإرسالها بأمان.',
+            'cancelled' => 'أُلغي التنفيذ المحلي وحُفظت حالة الإلغاء.',
+            _ => 'فشل التنفيذ المحلي وحُفظ سبب الفشل.',
+          },
+        ));
+        _activePeerExecutionTokens.remove(request.executionId);
+        _cancelledIncomingExecutions.remove(request.executionId);
+      } finally {
+        _activePeerExecutionTokens.remove(request.executionId);
+        _cancelledIncomingExecutions.remove(request.executionId);
+        _pendingIncomingExecutionPrompts.remove(request.executionId);
+        _pendingIncomingExecutionDevices.remove(session.deviceId);
+        _refreshConnectedPeerCapabilities();
+      }
+    } on Object catch (error) {
+      try {
+        await _sendExecutionAck(
+          session,
+          rawId is String ? rawId : '',
+          accepted: false,
+          retryable: error is! PeerTaskExecutionException,
+          message: error.toString(),
+        );
+      } on Object {
+        // The session may have closed while the request was being validated.
+      }
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.error,
+        deviceId: session.deviceId,
+        message: 'رُفض طلب تنفيذ وارد: $error',
+      ));
+    }
+  }
+
+  String _boundedExecutionError(Object error) {
+    final runes = error.toString().runes;
+    return String.fromCharCodes(runes.take(4000));
+  }
+
+  Future<void> _sendExecutionAckBestEffort(
+    _PeerSession session,
+    String executionId, {
+    required bool accepted,
+    required bool retryable,
+    String? status,
+    required String message,
+  }) async {
+    if (!identical(_sessions[session.deviceId], session)) return;
+    try {
+      await _sendExecutionAck(
+        session,
+        executionId,
+        accepted: accepted,
+        retryable: retryable,
+        status: status,
+        message: message,
+      );
+    } on Object {
+      // The sender retries the same durable execution ID after reconnect.
+    }
+  }
+
+  Future<void> _sendExecutionResultBestEffort(
+    _PeerSession session,
+    PeerTaskExecutionResult result,
+  ) async {
+    if (!identical(_sessions[session.deviceId], session)) return;
+    try {
+      await session.channel.send(result.toMessage());
+    } on Object catch (error) {
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        deviceId: session.deviceId,
+        message: 'حُفظت النتيجة محلياً، وسيُعاد إرسالها عند عودة الاتصال: $error',
+      ));
+    }
+  }
+
+  Future<void> _sendExecutionAck(
+    _PeerSession session,
+    String executionId, {
+    required bool accepted,
+    required bool retryable,
+    String? status,
+    required String message,
+  }) => session.channel.send({
+        'kind': 'task_execution_ack',
+        'version': peerTaskExecutionVersion,
+        'execution_id': executionId,
+        'accepted': accepted,
+        'retryable': retryable,
+        'status': status,
+        'message': message,
+      });
+
+  Future<void> _handlePeerExecutionAck(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final executionId = message['execution_id'];
+    if (message['version'] != peerTaskExecutionVersion || executionId is! String) return;
+    final record = await _executionRepository.get(executionId);
+    if (record == null || record.direction != 'outgoing' ||
+        record.deviceId != session.deviceId ||
+        (record.status != PeerTaskExecutionStatus.awaitingApproval &&
+            record.status != PeerTaskExecutionStatus.queued)) return;
+    var status = record.status;
+    if (message['accepted'] == true) {
+      if (status == PeerTaskExecutionStatus.queued) {
+        await _executionRepository.transition(
+          executionId: executionId,
+          from: PeerTaskExecutionStatus.queued,
+          to: PeerTaskExecutionStatus.awaitingApproval,
+        );
+        status = PeerTaskExecutionStatus.awaitingApproval;
+      }
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: status,
+        to: PeerTaskExecutionStatus.approved,
+      );
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: PeerTaskExecutionStatus.approved,
+        to: PeerTaskExecutionStatus.running,
+      );
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        deviceId: session.deviceId,
+        message: 'وافق الجهاز المقابل على التنفيذ وبدأ تشغيل الخطوة.',
+      ));
+    } else if (message['retryable'] == true) {
+      if (status == PeerTaskExecutionStatus.awaitingApproval) {
+        await _executionRepository.transition(
+          executionId: executionId,
+          from: PeerTaskExecutionStatus.awaitingApproval,
+          to: PeerTaskExecutionStatus.queued,
+          error: message['message'] as String? ?? 'ينتظر الجهاز المستلم فتح شاشة الأجهزة.',
+        );
+      }
+    } else {
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: status,
+        to: PeerTaskExecutionStatus.rejected,
+        error: message['message'] as String? ?? 'رفض الجهاز المقابل التنفيذ.',
+      );
+    }
+    _events.add(DeviceNetworkEvent(
+      type: DeviceNetworkEventType.taskExecutionUpdated,
+      deviceId: session.deviceId,
+      message: message['message'] as String? ?? 'تم تحديث حالة طلب التنفيذ.',
+    ));
+  }
+
+  Future<void> _handlePeerExecutionResult(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final result = await PeerTaskExecutionResult.fromMessage(message);
+    final record = await _executionRepository.get(result.executionId);
+    if (record == null || record.direction != 'outgoing' ||
+        record.deviceId != session.deviceId) {
+      throw const PeerTaskExecutionException('نتيجة التنفيذ لا تطابق جهازاً وطلباً صادرين.');
+    }
+    if (record.status == PeerTaskExecutionStatus.queued ||
+        record.status == PeerTaskExecutionStatus.awaitingApproval) {
+      var current = record.status;
+      if (current == PeerTaskExecutionStatus.queued) {
+        await _executionRepository.transition(
+          executionId: result.executionId,
+          from: PeerTaskExecutionStatus.queued,
+          to: PeerTaskExecutionStatus.awaitingApproval,
+        );
+        current = PeerTaskExecutionStatus.awaitingApproval;
+      }
+      await _executionRepository.transition(
+        executionId: result.executionId,
+        from: current,
+        to: PeerTaskExecutionStatus.approved,
+      );
+      await _executionRepository.transition(
+        executionId: result.executionId,
+        from: PeerTaskExecutionStatus.approved,
+        to: PeerTaskExecutionStatus.running,
+      );
+    }
+    final inserted = await _executionRepository.storeResult(result: result);
+    await _applyRemoteStepResult(record, result);
+    await _sendExecutionResultAckBestEffort(session, result);
+    if (inserted) {
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionFinished,
+        deviceId: session.deviceId,
+        message: switch (result.outcome) {
+          'succeeded' => 'وصلت نتيجة الخطوة من الجهاز الآخر بنجاح.',
+          'cancelled' => 'أُلغيت خطوة التنفيذ على الجهاز الآخر.',
+          _ => 'فشل تنفيذ الخطوة على الجهاز الآخر: ${result.error}',
+        },
+      ));
+    }
+  }
+
+  Future<void> _applyRemoteStepResult(
+    PeerTaskExecutionRecord record,
+    PeerTaskExecutionResult result,
+  ) async {
+    final task = await _taskRepository.get(record.sourceTaskId);
+    if (task == null) return;
+    final steps = await _taskRepository.steps(record.sourceTaskId);
+    AgentTaskStepRecord? step;
+    for (final item in steps) {
+      if (item.stepKey == record.sourceStepKey) step = item;
+    }
+    if (step == null) return;
+    final nextStatus = switch (result.outcome) {
+      'succeeded' => AgentTaskStepStatus.succeeded,
+      'cancelled' => AgentTaskStepStatus.interrupted,
+      _ => AgentTaskStepStatus.failed,
+    };
+    if (step.status == nextStatus &&
+        (nextStatus != AgentTaskStepStatus.succeeded ||
+            step.outputText == result.outputText) &&
+        (nextStatus != AgentTaskStepStatus.failed ||
+            step.error == result.error)) {
+      return;
+    }
+    if (step.status != AgentTaskStepStatus.pending &&
+        step.status != AgentTaskStepStatus.interrupted) {
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        deviceId: record.deviceId,
+        message: 'وصلت نتيجة بعيدة، لكن حالة الخطوة تغيّرت محلياً؛ لم أستبدل نتيجتها.',
+      ));
+      return;
+    }
+    await _taskRepository.finishStep(
+      record.sourceTaskId,
+      record.sourceStepKey,
+      nextStatus,
+      output: result.outcome == 'succeeded' ? result.outputText : '',
+      error: result.error,
+    );
+    await _taskRepository.appendEvent(
+      taskId: record.sourceTaskId,
+      stepKey: record.sourceStepKey,
+      eventType: 'remote_step_${result.outcome}',
+      message: switch (result.outcome) {
+        'succeeded' => 'اكتمل تنفيذ الخطوة على جهاز مقترن، وحُفظ الناتج محلياً.',
+        'cancelled' => 'أُلغيت الخطوة على الجهاز الآخر؛ يمكن استئنافها محلياً.',
+        _ => 'فشل تنفيذ الخطوة على الجهاز الآخر: ${result.error}',
+      },
+      payload: {
+        'execution_id': record.executionId,
+        'device_id': record.deviceId,
+        'outcome': result.outcome,
+        'result_sha256': result.payloadSha256,
+      },
+    );
+  }
+
+  Future<void> _reconcileStoredRemoteResults() async {
+    final records = await _executionRepository.list(direction: 'outgoing');
+    for (final record in records) {
+      if (record.resultJson == null) continue;
+      try {
+        final decoded = jsonDecode(record.resultJson!);
+        if (decoded is! Map) continue;
+        final result = await PeerTaskExecutionResult.fromMessage(
+          decoded.cast<String, Object?>(),
+        );
+        await _applyRemoteStepResult(record, result);
+      } on Object {
+        // Keep the execution record for inspection; never overwrite local work.
+      }
+    }
+  }
+
+  Future<void> _sendExecutionResultAckBestEffort(
+    _PeerSession session,
+    PeerTaskExecutionResult result,
+  ) async {
+    if (!identical(_sessions[session.deviceId], session)) {
+      return;
+    }
+    try {
+      await session.channel.send({
+        'kind': 'task_execution_result_ack',
+        'version': peerTaskExecutionVersion,
+        'execution_id': result.executionId,
+        'result_sha256': result.payloadSha256,
+      });
+    } on Object {
+      // The sender has stored the result; the receiver will replay it after reconnect.
+    }
+  }
+
+  Future<void> _handlePeerExecutionResultAck(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final executionId = message['execution_id'];
+    final digest = message['result_sha256'];
+    if (message['version'] != peerTaskExecutionVersion ||
+        executionId is! String || digest is! String) {
+      return;
+    }
+    final record = await _executionRepository.get(executionId);
+    if (record == null ||
+        record.direction != 'incoming' ||
+        record.deviceId != session.deviceId ||
+        record.resultJson == null ||
+        record.resultSha256 != digest) {
+      return;
+    }
+    final marked = await _executionRepository.markResultAcknowledged(
+      executionId: executionId,
+      deviceId: session.deviceId,
+      resultSha256: digest,
+    );
+    if (marked) {
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        deviceId: session.deviceId,
+        message: 'أكد الجهاز المنسّق حفظ النتيجة؛ أُوقف تكرار إرسالها.',
+      ));
+    }
+  }
+
+  Future<void> _handlePeerExecutionCancel(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final executionId = message['execution_id'];
+    if (message['version'] != peerTaskExecutionVersion || executionId is! String) {
+      return;
+    }
+    final record = await _executionRepository.get(executionId);
+    if (record == null || record.direction != 'incoming' ||
+        record.deviceId != session.deviceId) return;
+    if (record.status == PeerTaskExecutionStatus.awaitingApproval) {
+      _cancelledIncomingExecutions.add(executionId);
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: PeerTaskExecutionStatus.awaitingApproval,
+        to: PeerTaskExecutionStatus.cancelled,
+        error: 'ألغى الجهاز المنسّق الطلب قبل الموافقة.',
+      );
+    } else if (record.status == PeerTaskExecutionStatus.approved) {
+      _cancelledIncomingExecutions.add(executionId);
+    } else if (record.status == PeerTaskExecutionStatus.running) {
+      final token = _activePeerExecutionTokens[executionId];
+      if (token == null) {
+        _cancelledIncomingExecutions.add(executionId);
+      } else {
+        token.cancel();
+      }
+    }
+    await session.channel.send({
+      'kind': 'task_execution_cancel_ack',
+      'version': peerTaskExecutionVersion,
+      'execution_id': executionId,
+      'accepted': true,
+    });
+  }
+
+  Future<void> _handlePeerExecutionCancelAck(
+    _PeerSession session,
+    Map<String, Object?> message,
+  ) async {
+    final executionId = message['execution_id'];
+    if (executionId is! String || message['version'] != peerTaskExecutionVersion) return;
+    final record = await _executionRepository.get(executionId);
+    if (record == null || record.direction != 'outgoing' ||
+        record.deviceId != session.deviceId || message['accepted'] != true) return;
+    if (record.status == PeerTaskExecutionStatus.awaitingApproval) {
+      await _executionRepository.transition(
+        executionId: executionId,
+        from: PeerTaskExecutionStatus.awaitingApproval,
+        to: PeerTaskExecutionStatus.cancelled,
+        error: 'أُرسل طلب إلغاء التنفيذ.',
+      );
+    } else if (record.status == PeerTaskExecutionStatus.running) {
+      // The remote result remains authoritative if cancellation raced completion.
+      _events.add(DeviceNetworkEvent(
+        type: DeviceNetworkEventType.taskExecutionUpdated,
+        deviceId: session.deviceId,
+        message: 'استلم الجهاز الآخر طلب الإلغاء؛ ننتظر النتيجة النهائية.',
+      ));
+    }
+  }
+
+  Future<void> _sendStoredExecutionResult(
+    _PeerSession session,
+    PeerTaskExecutionRecord record,
+  ) async {
+    final resultJson = record.resultJson;
+    if (resultJson == null || !identical(_sessions[session.deviceId], session)) {
+      return;
+    }
+    final decoded = jsonDecode(resultJson);
+    if (decoded is! Map) {
+      throw const PeerTaskExecutionException('النتيجة المحفوظة ليست كائن JSON.');
+    }
+    await session.channel.send(decoded.cast<String, Object?>());
+  }
+
+  Future<void> _flushPeerExecutionResults(String deviceId) async {
+    if (_disposed || !_sessions.containsKey(deviceId)) return;
+    final records = await _executionRepository.list(
+      direction: 'incoming',
+      deviceId: deviceId,
+    );
+    final session = _sessions[deviceId];
+    if (session == null) return;
+    for (final record in records) {
+      if (record.resultJson == null ||
+          record.resultAcknowledgedAtUnixMs != null ||
+          !{
+            PeerTaskExecutionStatus.succeeded,
+            PeerTaskExecutionStatus.failed,
+            PeerTaskExecutionStatus.cancelled,
+          }.contains(record.status)) {
+        continue;
+      }
+      try {
+        final decoded = jsonDecode(record.resultJson!);
+        if (decoded is! Map) continue;
+        await session.channel.send(decoded.cast<String, Object?>());
+      } on Object {
+        return;
+      }
+    }
+  }
+
+  void _refreshConnectedPeerCapabilities() {
+    for (final deviceId in _sessions.keys.toList(growable: false)) {
+      unawaited(_sendCapabilities(deviceId).catchError((Object _) {}));
+    }
+  }
+
   Future<void> _sendCapabilities(String deviceId) async {
     final session = _sessions[deviceId];
     if (session == null) return;
-    final snapshot = await _resourceMonitor.readSnapshot();
+    final snapshot = await _readResourceSnapshotForCapabilities();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final activePeerExecutions = _pendingIncomingExecutionDevices.length;
+    final availableMemory = snapshot?.availableMemoryBytes;
+    final totalMemory = snapshot?.totalMemoryBytes;
+    final readyModelProfiles = await _readReadyAgentModelProfiles();
     await session.channel.send({
       'kind': 'capabilities',
       'value': {
         'platform': Platform.operatingSystem,
-        'app_version': '2.6.2',
+        'app_version': '2.8.0',
         'native_runtime': 'llama.cpp',
         'model_session_concurrency': 1,
-        'available_memory_bytes': snapshot?.availableMemoryBytes,
-        'total_memory_bytes': snapshot?.totalMemoryBytes,
+        'available_memory_bytes': availableMemory != null && availableMemory > 0
+            ? availableMemory
+            : null,
+        'total_memory_bytes': totalMemory != null && totalMemory > 0
+            ? totalMemory
+            : null,
+        'cpu_logical_cores': snapshot?.cpuLogicalCores ??
+            Platform.numberOfProcessors.clamp(1, 256).toInt(),
+        'cpu_utilization_percent': snapshot?.cpuUtilizationPercent,
+        'battery_level_percent': snapshot?.batteryLevelPercent,
+        'is_charging': snapshot?.isCharging,
+        'thermal_status': snapshot?.thermalStatus,
+        'active_peer_executions': activePeerExecutions,
+        'execution_busy': activePeerExecutions > 0,
+        'resource_profile_version': 1,
+        'resource_profile_updated_at_unix_ms': now,
+        'ready_model_profiles_version': peerModelProfileInventoryVersion,
+        'ready_model_profile_signatures': readyModelProfiles,
         'protocol_version': peerProtocolVersion,
-        'task_execution': false,
+        'task_execution': onPeerTaskExecutionApproval != null &&
+            onPeerTaskExecute != null,
+        'task_execution_version': peerTaskExecutionVersion,
         'task_transfer': true,
         'task_transfer_version': peerTaskTransferVersion,
       },
     });
   }
 
+  /// Advertises only model metadata profiles assigned to ready local agents.
+  /// No local model IDs, display names, paths, or file contents are disclosed.
+  /// The signature is a compatibility key for GGUF metadata, not a content hash.
+  Future<List<String>> _readReadyAgentModelProfiles() async {
+    final agents = await _agentRepository.list();
+    final readyModelIds = agents
+        .where((agent) => agent.status == AgentRecordStatus.ready)
+        .map((agent) => agent.modelId)
+        .whereType<String>()
+        .toSet();
+    if (readyModelIds.isEmpty) return const [];
+
+    final models = await _modelRepository.list();
+    final signatures = <String>{};
+    for (final model in models) {
+      if (!readyModelIds.contains(model.id)) continue;
+      final profile = PeerInstalledModelProfile.fromModel(model);
+      if (profile == null || model.localPath == null || model.localPath!.isEmpty) {
+        continue;
+      }
+      final file = File(model.localPath!);
+      if (!await file.exists() || await file.length() != model.sizeBytes) {
+        continue;
+      }
+      signatures.add(profile.signature);
+    }
+    final result = signatures.toList()..sort();
+    return List.unmodifiable(result);
+  }
+
+  Future<ResourceSnapshot?> _readResourceSnapshotForCapabilities() async {
+    final now = DateTime.now();
+    final cachedAt = _cachedResourceSnapshotAt;
+    if (_cachedResourceSnapshot != null &&
+        cachedAt != null &&
+        now.difference(cachedAt) < const Duration(seconds: 10)) {
+      return _cachedResourceSnapshot;
+    }
+    final pending = _resourceSnapshotPending;
+    if (pending != null) return pending;
+    final future = _resourceMonitor.readSnapshot(includeExtendedTelemetry: true);
+    _resourceSnapshotPending = future;
+    try {
+      final snapshot = await future;
+      _cachedResourceSnapshot = snapshot;
+      _cachedResourceSnapshotAt = DateTime.now();
+      return snapshot;
+    } finally {
+      if (identical(_resourceSnapshotPending, future)) {
+        _resourceSnapshotPending = null;
+      }
+    }
+  }
+
   Future<void> ping(String deviceId) async {
     final session = _sessions[deviceId];
     if (session == null) throw const PeerProtocolException('الجهاز غير متصل.');
+    await _sendCapabilities(deviceId);
     await session.channel.send({
       'kind': 'ping',
       'sent_at_unix_ms': DateTime.now().millisecondsSinceEpoch,
@@ -1728,6 +2844,13 @@ class DeviceNetworkService {
     }
     _pendingTaskAcks.clear();
     _pendingTaskAckDevices.clear();
+    for (final token in _activePeerExecutionTokens.values) {
+      token.cancel();
+    }
+    _activePeerExecutionTokens.clear();
+    _pendingIncomingExecutionPrompts.clear();
+    _pendingIncomingExecutionDevices.clear();
+    _cancelledIncomingExecutions.clear();
     for (final session in sessions) {
       await session.connection.close();
     }

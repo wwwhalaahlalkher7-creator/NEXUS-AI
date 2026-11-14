@@ -4,6 +4,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../data/local_database.dart';
+import '../orchestration/agent_task_plan.dart';
 
 const peerTaskTransferVersion = 1;
 const peerTaskProposalMaximumBytes = 512 * 1024;
@@ -304,6 +305,7 @@ class RemoteTaskTransferRecord {
     required this.createdAtUnixMs,
     required this.updatedAtUnixMs,
     this.lastError,
+    this.importedTaskId,
   });
 
   final String transferId;
@@ -317,6 +319,7 @@ class RemoteTaskTransferRecord {
   final int createdAtUnixMs;
   final int updatedAtUnixMs;
   final String? lastError;
+  final String? importedTaskId;
 
   factory RemoteTaskTransferRecord.fromMap(Map<String, Object?> row) =>
       RemoteTaskTransferRecord(
@@ -331,6 +334,7 @@ class RemoteTaskTransferRecord {
         createdAtUnixMs: row['created_at_unix_ms']! as int,
         updatedAtUnixMs: row['updated_at_unix_ms']! as int,
         lastError: row['last_error'] as String?,
+        importedTaskId: row['imported_task_id'] as String?,
       );
 
   int get stepCount {
@@ -342,6 +346,47 @@ class RemoteTaskTransferRecord {
     } on FormatException {
       return 0;
     }
+  }
+}
+
+/// Rewrites foreign agent identifiers to explicitly selected local agents.
+/// It preserves the untrusted plan content; AgentTaskPlanParser performs the
+/// authoritative local-agent and dependency validation afterwards.
+class RemoteTaskPlanRemapper {
+  const RemoteTaskPlanRemapper._();
+
+  static String remap(
+    String sourcePlanJson,
+    Map<String, String> localAgentByRemoteId,
+  ) {
+    Object? decoded;
+    try {
+      decoded = jsonDecode(sourcePlanJson);
+    } on FormatException {
+      throw const PeerTaskTransferException('مخطط المهمة المستلمة ليس JSON صالحاً.');
+    }
+    if (decoded is! Map || decoded['steps'] is! List) {
+      throw const PeerTaskTransferException('بنية المخطط المستلم غير صالحة للاستيراد.');
+    }
+    final remappedSteps = <Map<String, Object?>>[];
+    for (final raw in decoded['steps'] as List) {
+      if (raw is! Map || raw['agent_id'] is! String) {
+        throw const PeerTaskTransferException('تعذر تحديد وكيل إحدى الخطوات المستلمة.');
+      }
+      final remoteAgentId = raw['agent_id']! as String;
+      final localAgentId = localAgentByRemoteId[remoteAgentId];
+      if (localAgentId == null || localAgentId.trim().isEmpty) {
+        throw PeerTaskTransferException('لم يتم تعيين وكيل محلي للوكيل المستلم "$remoteAgentId".');
+      }
+      remappedSteps.add({
+        for (final entry in raw.entries) entry.key.toString(): entry.value,
+        'agent_id': localAgentId,
+      });
+    }
+    return jsonEncode({
+      for (final entry in decoded.entries) entry.key.toString(): entry.value,
+      'steps': remappedSteps,
+    });
   }
 }
 
@@ -438,6 +483,127 @@ class RemoteTaskTransferRepository {
         'last_error': null,
       });
       return true;
+    });
+  }
+
+  /// Atomically converts a kept incoming proposal to a local planned task.
+  /// Repeated imports return the same task ID. Every mapped agent must still
+  /// exist and be ready at commit time.
+  Future<String> importIncomingAsLocalTask({
+    required String transferId,
+    required AgentTaskPlan plan,
+    String? plannerAgentId,
+  }) async {
+    if (plan.goal.trim().isEmpty || plan.steps.isEmpty) {
+      throw const PeerTaskTransferException('الخطة المحلية غير صالحة للاستيراد.');
+    }
+    final db = await _database.database;
+    return db.transaction((txn) async {
+      final transferRows = await txn.query(
+        'remote_task_transfers',
+        where: 'transfer_id = ?',
+        whereArgs: [transferId],
+        limit: 1,
+      );
+      if (transferRows.isEmpty) {
+        throw const PeerTaskTransferException('مقترح المهمة المستلم غير موجود.');
+      }
+      final transfer = transferRows.single;
+      if (transfer['direction'] != 'incoming' || transfer['status'] != 'kept') {
+        throw const PeerTaskTransferException('يمكن استيراد المقترحات الواردة المحفوظة فقط.');
+      }
+      if (transfer['goal'] != plan.goal.trim()) {
+        throw const PeerTaskTransferException('هدف الخطة المحلية لا يطابق المقترح الأصلي.');
+      }
+      final importedTaskId = transfer['imported_task_id'] as String?;
+      if (importedTaskId != null) {
+        final existingTask = await txn.query(
+          'agent_tasks',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [importedTaskId],
+          limit: 1,
+        );
+        if (existingTask.isNotEmpty) return importedTaskId;
+        throw const PeerTaskTransferException('مرجع الاستيراد السابق غير متسق؛ احذف المقترح وأعد مراجعته.');
+      }
+
+      final mappedAgentIds = plan.steps.map((step) => step.agentId).toSet().toList();
+      final readyAgentRows = await txn.query(
+        'agents',
+        columns: ['id'],
+        where: 'status = ?',
+        whereArgs: ['ready'],
+      );
+      final readyAgentIds = readyAgentRows
+          .map((row) => row['id']! as String)
+          .toSet();
+      if (mappedAgentIds.any((id) => !readyAgentIds.contains(id))) {
+        throw const PeerTaskTransferException('أحد الوكلاء المحليين لم يعد جاهزاً؛ راجع التعيينات وأعد المحاولة.');
+      }
+      if (plannerAgentId != null) {
+        final planner = await txn.query(
+          'agents', columns: ['id'], where: 'id = ? AND status = ?',
+          whereArgs: [plannerAgentId, 'ready'], limit: 1,
+        );
+        if (planner.isEmpty) {
+          throw const PeerTaskTransferException('الوكيل المحلي المحدد للتخطيط لم يعد جاهزاً.');
+        }
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final taskId = 'peer-import-$transferId';
+      await txn.insert('agent_tasks', {
+        'id': taskId,
+        'goal': plan.goal.trim(),
+        'planner_agent_id': plannerAgentId,
+        'status': AgentTaskStatus.planned.name,
+        'plan_json': plan.toJson(),
+        'error': null,
+        'created_at_unix_ms': now,
+        'updated_at_unix_ms': now,
+      });
+      for (var index = 0; index < plan.steps.length; index++) {
+        final step = plan.steps[index];
+        await txn.insert('agent_task_steps', {
+          'id': '$taskId-${step.id}',
+          'task_id': taskId,
+          'step_key': step.id,
+          'ordinal': index,
+          'agent_id': step.agentId,
+          'objective': step.objective,
+          'expected_output': step.expectedOutput,
+          'depends_on_json': jsonEncode(step.dependsOn),
+          'status': AgentTaskStepStatus.pending.name,
+          'output_text': '',
+          'error': null,
+          'started_at_unix_ms': null,
+          'finished_at_unix_ms': null,
+        });
+      }
+      await txn.insert('agent_task_events', {
+        'id': 'event-$now-${DateTime.now().microsecondsSinceEpoch}',
+        'task_id': taskId,
+        'step_key': null,
+        'event_type': 'peer_proposal_imported',
+        'message': 'استُورد مقترح جهاز مقترن بعد إعادة تعيين الوكلاء محلياً. لم يبدأ التنفيذ.',
+        'payload_json': jsonEncode({
+          'transfer_id': transferId,
+          'source_device_id': transfer['device_id'],
+          'source_task_id': transfer['source_task_id'],
+        }),
+        'created_at_unix_ms': now,
+      });
+      final changed = await txn.update(
+        'remote_task_transfers',
+        {'imported_task_id': taskId, 'updated_at_unix_ms': now},
+        where: 'transfer_id = ? AND imported_task_id IS NULL AND status = ?',
+        whereArgs: [transferId, 'kept'],
+      );
+      if (changed != 1) {
+        throw const PeerTaskTransferException('تغيرت حالة المقترح أثناء الاستيراد؛ لم يتم تثبيت المهمة.');
+      }
+      return taskId;
     });
   }
 

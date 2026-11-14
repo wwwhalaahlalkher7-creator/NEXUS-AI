@@ -8,7 +8,7 @@ void main() {
       final status = CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '0.9.0',
-        stage: 'alpha-2.6.2-peer-task-transfer',
+        stage: 'alpha-2.7.6-explainable-placement',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-initialized',
         inferenceAvailable: false,

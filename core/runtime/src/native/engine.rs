@@ -44,6 +44,50 @@ pub struct NativeModelOperation {
     pub message: String,
 }
 
+/// Process-wide memory and native-session lifecycle diagnostics. RSS values
+/// include the whole app process and are not a llama.cpp-only allocation total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMemorySnapshot {
+    pub available: bool,
+    pub memory_readable: bool,
+    pub model_loaded: bool,
+    pub context_loaded: bool,
+    pub generation_active: bool,
+    pub resident_bytes: u64,
+    pub peak_resident_bytes: u64,
+    pub virtual_bytes: u64,
+    pub kv_cache_clear_count: u64,
+    pub model_load_count: u64,
+    pub model_unload_count: u64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMemoryOperation {
+    pub success: bool,
+    pub message: String,
+}
+
+impl NativeMemorySnapshot {
+    #[cfg(not(target_os = "android"))]
+    fn unavailable() -> Self {
+        Self {
+            available: false,
+            memory_readable: false,
+            model_loaded: false,
+            context_loaded: false,
+            generation_active: false,
+            resident_bytes: 0,
+            peak_resident_bytes: 0,
+            virtual_bytes: 0,
+            kv_cache_clear_count: 0,
+            model_load_count: 0,
+            model_unload_count: 0,
+            message: "قياسات الذاكرة الأصلية متاحة على Android فقط.".to_owned(),
+        }
+    }
+}
+
 impl NativeEngineStatus {
     #[cfg(not(target_os = "android"))]
     fn unavailable(message: impl Into<String>) -> Self {
@@ -62,8 +106,8 @@ impl NativeEngineStatus {
 #[allow(unsafe_code)]
 mod android {
     use super::{
-        NativeChatMessage, NativeEngineStatus, NativeGenerationOperation, NativeModelOperation,
-        NativeTokenCallback,
+        NativeChatMessage, NativeEngineStatus, NativeGenerationOperation, NativeMemoryOperation,
+        NativeMemorySnapshot, NativeModelOperation, NativeTokenCallback,
     };
     use libloading::Library;
     use std::ffi::{c_char, c_void, CStr, CString};
@@ -78,6 +122,24 @@ mod android {
     type LastErrorFn = unsafe extern "C" fn() -> *const c_char;
     type InferenceAvailableFn = unsafe extern "C" fn() -> i32;
     type CancelGenerationFn = unsafe extern "C" fn() -> i32;
+    type MemorySnapshotFn = unsafe extern "C" fn(*mut MemorySnapshotFfi) -> i32;
+    type ClearContextMemoryFn = unsafe extern "C" fn() -> i32;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct MemorySnapshotFfi {
+        memory_readable: i32,
+        model_loaded: i32,
+        context_loaded: i32,
+        generation_active: i32,
+        resident_bytes: u64,
+        peak_resident_bytes: u64,
+        virtual_bytes: u64,
+        kv_cache_clear_count: u64,
+        model_load_count: u64,
+        model_unload_count: u64,
+    }
+
     #[repr(C)]
     struct ChatMessageFfi {
         role: *const c_char,
@@ -110,6 +172,8 @@ mod android {
         last_error: LastErrorFn,
         inference_available: InferenceAvailableFn,
         cancel_generation: CancelGenerationFn,
+        memory_snapshot: MemorySnapshotFn,
+        clear_context_memory: ClearContextMemoryFn,
         generate: GenerateFn,
     }
 
@@ -185,6 +249,16 @@ mod android {
                 .get::<CancelGenerationFn>(b"nexus_llama_cancel_generation\0")
                 .map_err(|error| error.to_string())?
         };
+        let memory_snapshot = unsafe {
+            *library
+                .get::<MemorySnapshotFn>(b"nexus_llama_memory_snapshot\0")
+                .map_err(|error| error.to_string())?
+        };
+        let clear_context_memory = unsafe {
+            *library
+                .get::<ClearContextMemoryFn>(b"nexus_llama_clear_context_memory\0")
+                .map_err(|error| error.to_string())?
+        };
         let generate = unsafe {
             *library
                 .get::<GenerateFn>(b"nexus_llama_generate\0")
@@ -218,6 +292,8 @@ mod android {
             last_error,
             inference_available,
             cancel_generation,
+            memory_snapshot,
+            clear_context_memory,
             generate,
         })
     }
@@ -489,6 +565,71 @@ mod android {
         }
     }
 
+    pub(super) fn memory_snapshot() -> NativeMemorySnapshot {
+        match with_backend(|backend| {
+            let mut snapshot = MemorySnapshotFfi::default();
+            // SAFETY: the adapter writes a fixed repr(C) POD snapshot into this
+            // initialized buffer and does not retain the pointer.
+            if unsafe { (backend.memory_snapshot)(&mut snapshot) } != 1 {
+                return Err(read_last_error(backend, "تعذر قراءة قياسات الذاكرة الأصلية."));
+            }
+            Ok(snapshot)
+        }) {
+            Ok(snapshot) => NativeMemorySnapshot {
+                available: true,
+                memory_readable: snapshot.memory_readable == 1,
+                model_loaded: snapshot.model_loaded == 1,
+                context_loaded: snapshot.context_loaded == 1,
+                generation_active: snapshot.generation_active == 1,
+                resident_bytes: snapshot.resident_bytes,
+                peak_resident_bytes: snapshot.peak_resident_bytes,
+                virtual_bytes: snapshot.virtual_bytes,
+                kv_cache_clear_count: snapshot.kv_cache_clear_count,
+                model_load_count: snapshot.model_load_count,
+                model_unload_count: snapshot.model_unload_count,
+                message: if snapshot.memory_readable == 1 {
+                    "قياسات ذاكرة العملية الأصلية متاحة.".to_owned()
+                } else {
+                    "حالة جلسة النموذج متاحة، لكن /proc/self/status غير قابل للقراءة.".to_owned()
+                },
+            },
+            Err(message) => NativeMemorySnapshot {
+                available: false,
+                memory_readable: false,
+                model_loaded: false,
+                context_loaded: false,
+                generation_active: false,
+                resident_bytes: 0,
+                peak_resident_bytes: 0,
+                virtual_bytes: 0,
+                kv_cache_clear_count: 0,
+                model_load_count: 0,
+                model_unload_count: 0,
+                message,
+            },
+        }
+    }
+
+    pub(super) fn clear_context_memory() -> NativeMemoryOperation {
+        match with_backend(|backend| {
+            // SAFETY: the adapter uses try_lock and refuses to clear a live
+            // generation's KV state.
+            if unsafe { (backend.clear_context_memory)() } != 1 {
+                return Err(read_last_error(backend, "تعذر تفريغ KV Cache."));
+            }
+            Ok(())
+        }) {
+            Ok(()) => NativeMemoryOperation {
+                success: true,
+                message: "تم تفريغ KV Cache المؤقت مع الإبقاء على أوزان النموذج والسياق.".to_owned(),
+            },
+            Err(message) => NativeMemoryOperation {
+                success: false,
+                message,
+            },
+        }
+    }
+
     pub(super) fn cancel_generation() -> bool {
         with_backend(|backend| {
             // SAFETY: sets an atomic cancellation flag without waiting on the session lock.
@@ -629,6 +770,29 @@ pub fn unload_native_model() -> NativeModelOperation {
     }
 }
 
+#[cfg(target_os = "android")]
+pub fn native_memory_snapshot() -> NativeMemorySnapshot {
+    android::memory_snapshot()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn native_memory_snapshot() -> NativeMemorySnapshot {
+    NativeMemorySnapshot::unavailable()
+}
+
+#[cfg(target_os = "android")]
+pub fn clear_native_context_memory() -> NativeMemoryOperation {
+    android::clear_context_memory()
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn clear_native_context_memory() -> NativeMemoryOperation {
+    NativeMemoryOperation {
+        success: false,
+        message: "تفريغ KV Cache متاح على Android ARM64 فقط.".to_owned(),
+    }
+}
+
 impl fmt::Display for NativeEngineStatus {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.available {
@@ -652,6 +816,18 @@ mod tests {
         assert!(!status.inference_available);
         assert!(status.version.is_none());
         assert!(status.message.contains("Android"));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn host_memory_lifecycle_does_not_claim_native_measurements() {
+        let snapshot = native_memory_snapshot();
+        assert!(!snapshot.available);
+        assert!(!snapshot.memory_readable);
+        assert!(!snapshot.model_loaded);
+        assert!(!snapshot.context_loaded);
+        assert_eq!(snapshot.resident_bytes, 0);
+        assert!(!clear_native_context_memory().success);
     }
 
     #[cfg(not(target_os = "android"))]
