@@ -11,6 +11,7 @@ void main() {
         createdAtUnixMs: 100,
         updatedAtUnixMs: 200,
         lastMessagePreview: 'رسالة أخيرة',
+        agentId: 'agent-1',
       );
 
       final restored = ConversationRecord.fromMap(record.toMap());
@@ -19,6 +20,7 @@ void main() {
       expect(restored.title, record.title);
       expect(restored.updatedAtUnixMs, 200);
       expect(restored.lastMessagePreview, 'رسالة أخيرة');
+      expect(restored.agentId, 'agent-1');
     });
 
     test('message preserves role and delivery status', () {

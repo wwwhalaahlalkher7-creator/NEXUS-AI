@@ -169,6 +169,19 @@ jobs:
           set -euo pipefail
           python3 scripts/test_llama_adapter_contract.py
           python3 scripts/test_conversation_migration.py
+          python3 scripts/test_agent_persona_migration.py
+          python3 scripts/test_local_tools_contract.py
+          python3 scripts/test_knowledge_migration.py
+          python3 scripts/test_resource_settings_migration.py
+          python3 scripts/test_knowledge_contract.py
+          python3 scripts/test_agent_task_migration.py
+          python3 scripts/test_agent_orchestration_contract.py
+          python3 scripts/test_paired_devices_migration.py
+          python3 scripts/test_device_network_contract.py
+          python3 scripts/test_peer_discovery_contract.py
+          python3 scripts/test_peer_task_transfer_migration.py
+          python3 scripts/test_peer_task_transfer_contract.py
+          python3 scripts/test_android_manifest_patch.py
 
       - name: Ensure cached Flutter Rust Bridge build tools
         shell: bash
@@ -207,23 +220,33 @@ jobs:
           rm -rf android
           cp -a "$scaffold_dir/android" ./android
           rm -rf "$scaffold_dir"
-          # The native libraries are compiled against Android API 28; keep the
-          # app's declared minimum SDK aligned with that native requirement.
+          # The native libraries require API 28. Keep target SDK at 36 until
+          # the Android 17/API 37 ACCESS_LOCAL_NETWORK runtime flow is added.
           python3 - <<'PY'
           from pathlib import Path
           import re
 
           gradle = Path("android/app/build.gradle.kts")
           content = gradle.read_text()
-          updated, replacements = re.subn(
+          updated, min_replacements = re.subn(
               r"(?m)^(\s*)minSdk\s*=\s*(?:flutter\.minSdkVersion|\d+)\s*$",
               r"\g<1>minSdk = 28",
               content,
           )
-          if replacements != 1:
-              raise SystemExit(f"Expected one Flutter minSdk declaration, found {replacements}")
+          updated, target_replacements = re.subn(
+              r"(?m)^(\s*)targetSdk\s*=\s*(?:flutter\.targetSdkVersion|\d+)\s*$",
+              r"\g<1>targetSdk = 36",
+              updated,
+          )
+          if min_replacements != 1:
+              raise SystemExit(f"Expected one Flutter minSdk declaration, found {min_replacements}")
+          if target_replacements != 1:
+              raise SystemExit(f"Expected one Flutter targetSdk declaration, found {target_replacements}")
           gradle.write_text(updated)
           PY
+
+      - name: Add Android local-network permissions
+        run: python3 scripts/patch_android_manifest.py
 
       - name: Build llama.cpp native adapter for Android ARM64
         shell: bash
@@ -532,9 +555,14 @@ jobs:
       - name: Resolve Flutter dependencies
         run: flutter pub get
 
-      - name: Check Dart formatting without modifying sources
+      - name: Format and verify Dart sources
         shell: bash
-        run: dart format --output=none --set-exit-if-changed lib test
+        run: |
+          set -euo pipefail
+          # Keep formatting deterministic before the strict format check.
+          # Rust uses the same normalize-then-verify pattern above.
+          dart format lib test
+          dart format --output=none --set-exit-if-changed lib test
 
       - name: Run Flutter analysis and tests in parallel (both required)
         shell: bash

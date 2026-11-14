@@ -9,6 +9,7 @@ abstract interface class AgentStore {
   Future<AgentRecord?> getById(String id);
   Future<void> updateStatus(String id, AgentRecordStatus status);
   Future<void> updateModel(String id, String? modelId);
+  Future<void> updateSystemPrompt(String id, String systemPrompt);
   Future<void> delete(String id);
 }
 
@@ -20,10 +21,18 @@ class AgentRepository implements AgentStore {
 
   @override
   Future<void> create(AgentRecord agent) async {
+    final systemPrompt = agent.systemPrompt.trim();
+    if (systemPrompt.length > 3000) {
+      throw ArgumentError.value(
+        agent.systemPrompt,
+        'systemPrompt',
+        'Agent instructions cannot exceed 3000 characters.',
+      );
+    }
     final db = await _localDatabase.database;
     await db.insert(
       'agents',
-      agent.toMap(),
+      {...agent.toMap(), 'system_prompt': systemPrompt},
       conflictAlgorithm: ConflictAlgorithm.abort,
     );
   }
@@ -71,6 +80,28 @@ class AgentRepository implements AgentStore {
     final changed = await db.update(
       'agents',
       {'model_id': modelId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (changed == 0) {
+      throw StateError('Agent does not exist: $id');
+    }
+  }
+
+  @override
+  Future<void> updateSystemPrompt(String id, String systemPrompt) async {
+    final normalized = systemPrompt.trim();
+    if (normalized.length > 3000) {
+      throw ArgumentError.value(
+        systemPrompt,
+        'systemPrompt',
+        'Agent instructions cannot exceed 3000 characters.',
+      );
+    }
+    final db = await _localDatabase.database;
+    final changed = await db.update(
+      'agents',
+      {'system_prompt': normalized},
       where: 'id = ?',
       whereArgs: [id],
     );

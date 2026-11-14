@@ -372,7 +372,7 @@ mod tests {
     fn bridge_api_returns_core_metadata() {
         let info = get_core_info_for_app();
         assert_eq!(info.name, "NEXUS AI");
-        assert_eq!(info.stage, "alpha-1.9-multi-turn-context");
+        assert_eq!(info.stage, "alpha-2.6.2-peer-task-transfer");
     }
 
     #[test]
@@ -381,7 +381,7 @@ mod tests {
         assert!(diagnostics.bridge_connected);
         assert!(!diagnostics.inference_available);
         assert!(!diagnostics.model_loaded);
-        assert_eq!(diagnostics.stage, "alpha-1.9-multi-turn-context");
+        assert_eq!(diagnostics.stage, "alpha-2.6.2-peer-task-transfer");
         assert_eq!(diagnostics.model_registry, "flutter_sqlite");
         #[cfg(not(target_os = "android"))]
         assert!(!diagnostics.inference_available);

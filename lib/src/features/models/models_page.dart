@@ -33,6 +33,7 @@ class _ModelsPageState extends State<ModelsPage> {
   final Set<String> _importingModelIds = {};
   final Set<String> _verifyingModelIds = {};
   final Set<String> _loadingModelIds = {};
+  final Set<String> _switchingModelIds = {};
   bool _unloadingRuntime = false;
 
   @override
@@ -107,7 +108,9 @@ class _ModelsPageState extends State<ModelsPage> {
       return;
     }
     if (_runtimeManager.snapshot.modelId == model.id &&
-        (_runtimeManager.isBusy || _runtimeManager.snapshot.isLoaded)) {
+        (_runtimeManager.isBusy ||
+            _runtimeManager.snapshot.isLoaded ||
+            _runtimeManager.snapshot.needsRecovery)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أوقف جلسة النموذج أولاً قبل استبدال ملفه.')),
       );
@@ -243,6 +246,52 @@ class _ModelsPageState extends State<ModelsPage> {
     }
   }
 
+  Future<void> _switchRuntimeModel(ModelRecord model) async {
+    if (_switchingModelIds.contains(model.id) ||
+        _runtimeManager.isBusy ||
+        _runtimeManager.isGenerating) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تبديل النموذج النشط؟'),
+        content: Text(
+          'سيتم تفريغ النموذج الحالي ثم تحميل «${model.displayName}». '
+          'إذا فشل التحميل سيحاول المحرك استعادة النموذج السابق.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('تأكيد التبديل'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _switchingModelIds.add(model.id));
+    try {
+      final result = await _runtimeManager.switchTo(model);
+      if (!mounted) return;
+      setState(() => _runtimeSnapshot = result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر تبديل النموذج: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _switchingModelIds.remove(model.id));
+    }
+  }
+
   Future<void> _unloadRuntime() async {
     if (_unloadingRuntime) {
       return;
@@ -270,7 +319,9 @@ class _ModelsPageState extends State<ModelsPage> {
 
   Future<void> _deleteModel(ModelRecord model) async {
     if (_runtimeManager.snapshot.modelId == model.id &&
-        (_runtimeManager.isBusy || _runtimeManager.snapshot.isLoaded)) {
+        (_runtimeManager.isBusy ||
+            _runtimeManager.snapshot.isLoaded ||
+            _runtimeManager.snapshot.needsRecovery)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أوقف جلسة النموذج أولاً قبل حذف سجله.')),
       );
@@ -437,15 +488,41 @@ class _ModelsPageState extends State<ModelsPage> {
                                 runSpacing: 4,
                                 children: [
                                   TextButton.icon(
-                                    onPressed: () => _prepareRuntime(model),
+                                    onPressed: _runtimeManager.isBusy ||
+                                            _runtimeManager.isGenerating
+                                        ? null
+                                        : () => _prepareRuntime(model),
                                     icon: const Icon(Icons.play_circle_outline),
                                     label: const Text('تقييم جاهزية التشغيل'),
                                   ),
+                                  if (_runtimeSnapshot?.state == ModelSessionState.loaded &&
+                                      _runtimeSnapshot?.modelId != model.id)
+                                    FilledButton.tonalIcon(
+                                      onPressed: _runtimeManager.isBusy ||
+                                              _runtimeManager.isGenerating ||
+                                              _switchingModelIds.contains(model.id)
+                                          ? null
+                                          : () => _switchRuntimeModel(model),
+                                      icon: _switchingModelIds.contains(model.id)
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Icon(Icons.swap_horiz_rounded),
+                                      label: Text(
+                                        _switchingModelIds.contains(model.id)
+                                            ? 'جارٍ التبديل…'
+                                            : 'التبديل إلى هذا النموذج',
+                                      ),
+                                    ),
                                   if (_runtimeManager.engineAvailable &&
                                       _runtimeSnapshot?.state == ModelSessionState.readyToLoad &&
                                       _runtimeSnapshot?.modelId == model.id)
                                     FilledButton.tonalIcon(
-                                      onPressed: _loadingModelIds.contains(model.id)
+                                      onPressed: _runtimeManager.isBusy ||
+                                              _runtimeManager.isGenerating ||
+                                              _loadingModelIds.contains(model.id)
                                           ? null
                                           : () => _loadPreparedModel(model),
                                       icon: _loadingModelIds.contains(model.id)
@@ -461,10 +538,15 @@ class _ModelsPageState extends State<ModelsPage> {
                                             : 'تحميل النموذج',
                                       ),
                                     ),
-                                  if (_runtimeSnapshot?.state == ModelSessionState.loaded &&
+                                  if ((_runtimeSnapshot?.state == ModelSessionState.loaded ||
+                                          _runtimeSnapshot?.needsRecovery == true) &&
                                       _runtimeSnapshot?.modelId == model.id)
                                     TextButton.icon(
-                                      onPressed: _unloadingRuntime ? null : _unloadRuntime,
+                                      onPressed: _unloadingRuntime ||
+                                              _runtimeManager.isBusy ||
+                                              _runtimeManager.isGenerating
+                                          ? null
+                                          : _unloadRuntime,
                                       icon: _unloadingRuntime
                                           ? const SizedBox(
                                               width: 16,
@@ -473,7 +555,11 @@ class _ModelsPageState extends State<ModelsPage> {
                                             )
                                           : const Icon(Icons.stop_circle_outlined),
                                       label: Text(
-                                        _unloadingRuntime ? 'جارٍ التفريغ…' : 'تفريغ النموذج',
+                                        _unloadingRuntime
+                                            ? 'جارٍ التفريغ…'
+                                            : _runtimeSnapshot?.needsRecovery == true
+                                                ? 'استعادة المحرك (تفريغ)'
+                                                : 'تفريغ النموذج',
                                       ),
                                     ),
                                 ],

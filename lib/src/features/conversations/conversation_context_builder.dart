@@ -31,10 +31,14 @@ class ConversationContextBuilder {
 
   static ConversationContextSelection build(
     Iterable<MessageRecord> records, {
-    int maxMessages = 64,
-    int maxBytes = 48 * 1024,
+    int? maxMessages,
+    int? maxBytes,
+    String? systemPrompt,
+    Iterable<String> additionalSystemPrompts = const [],
+    String? userContextSuffix,
   }) {
-    if (maxMessages < 1 || maxBytes < 1) {
+    if ((maxMessages != null && maxMessages < 1) ||
+        (maxBytes != null && maxBytes < 1)) {
       throw ArgumentError('Context limits must be positive.');
     }
 
@@ -52,10 +56,53 @@ class ConversationContextBuilder {
             ))
         .toList();
 
-    if (messages.isEmpty || messages.last.role != MessageRole.user.name) {
-      throw StateError(
-        'The current turn must end with a completed user message.',
+    final normalizedUserContext = userContextSuffix?.trim();
+    if (normalizedUserContext != null && normalizedUserContext.isNotEmpty) {
+      final latestUserIndex = messages.lastIndexWhere(
+        (message) => message.role == MessageRole.user.name,
       );
+      if (latestUserIndex < 0) {
+        throw StateError('A user context suffix requires a user turn.');
+      }
+      final latestUserMessage = messages[latestUserIndex];
+      messages[latestUserIndex] = ConversationContextMessage(
+        role: latestUserMessage.role,
+        content: '${latestUserMessage.content}\n\n$normalizedUserContext',
+      );
+    }
+
+    final systemPrompts = <String>[
+      if (systemPrompt != null) systemPrompt,
+      ...additionalSystemPrompts,
+    ].map((prompt) => prompt.trim()).where(
+      (prompt) => prompt.isNotEmpty,
+    );
+    final normalizedSystemPrompts = systemPrompts.toList(growable: false);
+    if (normalizedSystemPrompts.isNotEmpty) {
+      // Keep persona and runtime policy in one system message. Several GGUF
+      // chat templates only accept one leading system instruction reliably.
+      messages.insert(
+        0,
+        ConversationContextMessage(
+          role: MessageRole.system.name,
+          content: normalizedSystemPrompts.join('\n\n'),
+        ),
+      );
+    }
+
+    if (messages.isEmpty ||
+        (messages.last.role != MessageRole.user.name &&
+            messages.last.role != MessageRole.tool.name)) {
+      throw StateError(
+        'The current turn must end with a completed user or tool message.',
+      );
+    }
+
+    var currentTurnStart = messages.lastIndexWhere(
+      (message) => message.role == MessageRole.user.name,
+    );
+    if (currentTurnStart < 0) {
+      throw StateError('The context has no current user turn.');
     }
 
     int byteLength() => messages.fold<int>(
@@ -64,11 +111,12 @@ class ConversationContextBuilder {
         );
 
     var dropped = 0;
-    while (messages.length > maxMessages || byteLength() > maxBytes) {
+    while ((maxMessages != null && messages.length > maxMessages) ||
+        (maxBytes != null && byteLength() > maxBytes)) {
       final oldestIndex = messages.indexWhere(
         (message) => message.role != MessageRole.system.name,
       );
-      if (oldestIndex < 0 || oldestIndex == messages.length - 1) {
+      if (oldestIndex < 0 || oldestIndex >= currentTurnStart) {
         throw StateError(
           'The current user message alone exceeds the safe context '
           'transport budget.',
@@ -76,13 +124,17 @@ class ConversationContextBuilder {
       }
 
       var end = oldestIndex + 1;
-      if (messages[oldestIndex].role == MessageRole.user.name &&
-          end < messages.length - 1 &&
-          messages[end].role == MessageRole.assistant.name) {
+      // Drop a complete oldest interaction, including assistant tool-call
+      // envelopes and their tool results, rather than leaving orphaned tool
+      // messages in the retained prompt.
+      while (end < currentTurnStart &&
+          messages[end].role != MessageRole.user.name) {
         end++;
       }
-      dropped += end - oldestIndex;
+      final removedCount = end - oldestIndex;
+      dropped += removedCount;
       messages.removeRange(oldestIndex, end);
+      currentTurnStart -= removedCount;
     }
 
     return ConversationContextSelection(

@@ -9,7 +9,10 @@ class ConversationRepository {
 
   final LocalDatabase _localDatabase;
 
-  Future<ConversationRecord> create({String title = 'محادثة جديدة'}) async {
+  Future<ConversationRecord> create({
+    String title = 'محادثة جديدة',
+    String? agentId,
+  }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = 'conversation-${DateTime.now().microsecondsSinceEpoch}';
     final normalizedTitle = _normalizeTitle(title);
@@ -18,6 +21,7 @@ class ConversationRepository {
       title: normalizedTitle,
       createdAtUnixMs: now,
       updatedAtUnixMs: now,
+      agentId: agentId,
     );
     final db = await _localDatabase.database;
     await db.insert(
@@ -37,6 +41,33 @@ class ConversationRepository {
       limit: 1,
     );
     return rows.isEmpty ? null : ConversationRecord.fromMap(rows.first);
+  }
+
+  Future<void> updateAgent(String conversationId, String? agentId) async {
+    final db = await _localDatabase.database;
+    await db.transaction((txn) async {
+      if (agentId != null) {
+        final agents = await txn.query(
+          'agents',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [agentId],
+          limit: 1,
+        );
+        if (agents.isEmpty) {
+          throw StateError('Agent does not exist: $agentId');
+        }
+      }
+      final changed = await txn.update(
+        'conversations',
+        {'agent_id': agentId},
+        where: 'id = ?',
+        whereArgs: [conversationId],
+      );
+      if (changed != 1) {
+        throw StateError('Conversation does not exist: $conversationId');
+      }
+    });
   }
 
   Future<List<ConversationRecord>> list() async {

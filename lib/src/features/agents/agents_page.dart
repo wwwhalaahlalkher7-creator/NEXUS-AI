@@ -1,10 +1,12 @@
 import 'package:material_ui/material_ui.dart';
 
-import 'agent_record.dart';
-import 'agent_repository.dart';
+import '../models/model_file_verifier.dart';
 import '../models/model_record.dart';
 import '../models/model_repository.dart';
-import '../models/model_file_verifier.dart';
+import '../orchestration/agent_tasks_page.dart';
+import '../runtime/model_runtime_manager.dart';
+import 'agent_record.dart';
+import 'agent_repository.dart';
 
 class AgentsPage extends StatefulWidget {
   const AgentsPage({
@@ -12,11 +14,13 @@ class AgentsPage extends StatefulWidget {
     this.repository,
     this.modelRepository,
     this.modelFileVerifier,
+    this.runtimeManager,
   });
 
   final AgentStore? repository;
   final ModelStore? modelRepository;
   final ModelFileVerifier? modelFileVerifier;
+  final ModelRuntimeManager? runtimeManager;
 
   @override
   State<AgentsPage> createState() => _AgentsPageState();
@@ -65,6 +69,7 @@ class _AgentsPageState extends State<AgentsPage> {
           id: id,
           name: draft.name,
           description: draft.description,
+          systemPrompt: draft.systemPrompt,
           status: AgentRecordStatus.draft,
           createdAtUnixMs: now,
         ),
@@ -77,6 +82,32 @@ class _AgentsPageState extends State<AgentsPage> {
       if (mounted) {
         _showMessage('تعذر إنشاء الوكيل: $error');
       }
+    }
+  }
+
+  Future<void> _editInstructions(AgentRecord agent) async {
+    final prompt = await showDialog<String>(
+      context: context,
+      builder: (_) => _AgentInstructionsDialog(
+        initialValue: agent.systemPrompt,
+      ),
+    );
+    if (prompt == null || !mounted) {
+      return;
+    }
+    setState(() => _updatingIds.add(agent.id));
+    try {
+      await _repository.updateSystemPrompt(agent.id, prompt);
+      if (mounted) {
+        _refresh();
+        _showMessage('تم حفظ تعليمات «${agent.name}».');
+      }
+    } catch (error) {
+      if (mounted) {
+        _showMessage('تعذر حفظ التعليمات: $error');
+      }
+    } finally {
+      if (mounted) setState(() => _updatingIds.remove(agent.id));
     }
   }
 
@@ -260,6 +291,23 @@ class _AgentsPageState extends State<AgentsPage> {
     }
   }
 
+  Future<void> _openTaskOrchestration() async {
+    final runtimeManager = widget.runtimeManager;
+    if (runtimeManager == null) {
+      _showMessage('إدارة جلسة النموذج غير متاحة في هذه الشاشة.');
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AgentTasksPage(
+          runtimeManager: runtimeManager,
+          agentRepository: _repository,
+          modelRepository: _modelRepository,
+        ),
+      ),
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -316,6 +364,14 @@ class _AgentsPageState extends State<AgentsPage> {
                       icon: const Icon(Icons.add),
                       label: const Text('إنشاء وكيل'),
                     ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: widget.runtimeManager == null
+                          ? null
+                          : _openTaskOrchestration,
+                      icon: const Icon(Icons.account_tree_outlined),
+                      label: const Text('تنسيق المهام'),
+                    ),
                   ],
                 ),
               ),
@@ -337,9 +393,22 @@ class _AgentsPageState extends State<AgentsPage> {
                       .length;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      '${agents.length} وكيل محفوظ · $readyCount بحالة جاهز',
-                      style: Theme.of(context).textTheme.bodySmall,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${agents.length} وكيل محفوظ · $readyCount بحالة جاهز',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: widget.runtimeManager == null
+                          ? null
+                          : _openTaskOrchestration,
+                          icon: const Icon(Icons.account_tree_outlined, size: 18),
+                          label: const Text('المهام'),
+                        ),
+                      ],
                     ),
                   );
                 }
@@ -375,6 +444,14 @@ class _AgentsPageState extends State<AgentsPage> {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
+                          if (agent.systemPrompt.trim().isNotEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 3),
+                              child: Text(
+                                'له تعليمات مخصصة',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ),
                           const SizedBox(height: 4),
                           _AgentStatusLabel(status: agent.status),
                           Padding(
@@ -390,7 +467,7 @@ class _AgentsPageState extends State<AgentsPage> {
                             const Padding(
                               padding: EdgeInsets.only(top: 4),
                               child: Text(
-                                'جاهز كإعداد فقط؛ لا يوجد محرك استدلال متصل حالياً.',
+                                'يمكن استخدام تعليماته في المحادثة عند اختياره.',
                                 style: TextStyle(fontSize: 12),
                               ),
                             ),
@@ -406,8 +483,13 @@ class _AgentsPageState extends State<AgentsPage> {
                           _deleteAgent(agent);
                         } else if (value == 'assign_model') {
                           _assignModel(agent);
+                        } else if (value == 'instructions') {
+                          _editInstructions(agent);
                         } else {
-                          _changeStatus(agent, AgentRecordStatus.values.byName(value));
+                          _changeStatus(
+                            agent,
+                            AgentRecordStatus.values.byName(value),
+                          );
                         }
                       },
                       itemBuilder: (context) => [
@@ -420,6 +502,10 @@ class _AgentsPageState extends State<AgentsPage> {
                         const PopupMenuItem<String>(
                           value: 'assign_model',
                           child: Text('ربط نموذج محلي'),
+                        ),
+                        const PopupMenuItem<String>(
+                          value: 'instructions',
+                          child: Text('تعليمات الوكيل'),
                         ),
                         const PopupMenuDivider(),
                         const PopupMenuItem<String>(
@@ -463,10 +549,15 @@ class _AgentsPageState extends State<AgentsPage> {
 }
 
 class _AgentDraft {
-  const _AgentDraft({required this.name, required this.description});
+  const _AgentDraft({
+    required this.name,
+    required this.description,
+    required this.systemPrompt,
+  });
 
   final String name;
   final String description;
+  final String systemPrompt;
 }
 
 class _CreateAgentDialog extends StatefulWidget {
@@ -479,6 +570,7 @@ class _CreateAgentDialog extends StatefulWidget {
 class _CreateAgentDialogState extends State<_CreateAgentDialog> {
   final _nameController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _systemPromptController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   void _submit() {
@@ -489,6 +581,7 @@ class _CreateAgentDialogState extends State<_CreateAgentDialog> {
       _AgentDraft(
         name: _nameController.text.trim(),
         description: _descriptionController.text.trim(),
+        systemPrompt: _systemPromptController.text.trim(),
       ),
     );
   }
@@ -497,6 +590,7 @@ class _CreateAgentDialogState extends State<_CreateAgentDialog> {
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _systemPromptController.dispose();
     super.dispose();
   }
 
@@ -533,6 +627,18 @@ class _CreateAgentDialogState extends State<_CreateAgentDialog> {
               decoration: const InputDecoration(labelText: 'الوصف (اختياري)'),
               minLines: 1,
               maxLines: 3,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _systemPromptController,
+              maxLength: 3000,
+              minLines: 3,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'تعليمات الوكيل (اختياري)',
+                hintText: 'حدد دوره وطريقة إجابته وحدود عمله…',
+                alignLabelWithHint: true,
+              ),
             ),
           ],
         ),
@@ -583,6 +689,62 @@ class _AgentStatusLabel extends StatelessWidget {
               ),
         ),
       ),
+    );
+  }
+}
+
+class _AgentInstructionsDialog extends StatefulWidget {
+  const _AgentInstructionsDialog({required this.initialValue});
+
+  final String initialValue;
+
+  @override
+  State<_AgentInstructionsDialog> createState() =>
+      _AgentInstructionsDialogState();
+}
+
+class _AgentInstructionsDialogState extends State<_AgentInstructionsDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: const Text('تعليمات الوكيل'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        minLines: 5,
+        maxLines: 10,
+        maxLength: 3000,
+        decoration: const InputDecoration(
+          hintText: 'اكتب الدور والسلوك المطلوب وحدود الاستجابة…',
+          border: OutlineInputBorder(),
+          alignLabelWithHint: true,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('حفظ التعليمات'),
+        ),
+      ],
     );
   }
 }

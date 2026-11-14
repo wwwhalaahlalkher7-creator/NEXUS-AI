@@ -191,6 +191,16 @@ class _ModelSessionSummary extends StatelessWidget {
               'جارٍ تفريغ النموذج',
               snapshot.message,
             ),
+          ModelSessionState.switching => (
+              Icons.swap_horiz_rounded,
+              'جارٍ تبديل النموذج',
+              snapshot.message,
+            ),
+          ModelSessionState.recoveryRequired => (
+              Icons.warning_amber_rounded,
+              'المحرك يحتاج إلى استعادة',
+              snapshot.message,
+            ),
           ModelSessionState.readyToLoad => (
               Icons.fact_check_outlined,
               'النموذج اجتاز فحص الجاهزية',

@@ -18,6 +18,9 @@ if [[ ! -d android ]]; then
   flutter create --platforms=android --project-name nexus_app .
 fi
 
+# Keep local Android permissions aligned with the CI-generated scaffold.
+python3 scripts/patch_android_manifest.py
+
 echo "Integrating Flutter Rust Bridge and resolving dependencies..."
 bash scripts/integrate_bridge.sh
 

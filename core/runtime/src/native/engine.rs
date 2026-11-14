@@ -377,12 +377,20 @@ mod android {
             .sum::<usize>();
         let valid_roles = ["system", "user", "assistant", "tool"];
         if messages.is_empty()
-            || messages.len() > 64
-            || total_bytes > 64 * 1024
+            || messages.len() > 4096
+            || total_bytes > 1024 * 1024
             || messages.iter().any(|message| {
                 message.content.trim().is_empty() || !valid_roles.contains(&message.role.as_str())
             })
-            || messages.last().map(|message| message.role.as_str()) != Some("user")
+            || !messages.last().is_some_and(|last| {
+                last.role == "user"
+                    || (last.role == "tool"
+                        && messages.len() >= 3
+                        && messages[messages.len() - 2].role == "assistant"
+                        && messages[..messages.len() - 2]
+                            .iter()
+                            .any(|message| message.role == "user"))
+            })
             || !(1..=1024).contains(&max_tokens)
             || !(0.05..=2.0).contains(&temperature)
             || !(1..=100).contains(&top_k)
@@ -393,7 +401,7 @@ mod android {
                 cancelled: false,
                 generated_tokens: 0,
                 trimmed_messages: 0,
-                message: "المحادثة أو إعدادات التوليد خارج الحدود الآمنة.".to_owned(),
+                message: "المحادثة أو إعدادات التوليد خارج نطاق النقل الآمن.".to_owned(),
             };
         }
         let owned_messages: Result<Vec<(CString, CString)>, _> = messages

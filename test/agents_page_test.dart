@@ -1,12 +1,11 @@
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:nexus_app/src/features/agents/agent_record.dart';
 import 'package:nexus_app/src/features/agents/agent_repository.dart';
 import 'package:nexus_app/src/features/agents/agents_page.dart';
+import 'package:nexus_app/src/features/models/model_file_verifier.dart';
 import 'package:nexus_app/src/features/models/model_record.dart';
 import 'package:nexus_app/src/features/models/model_repository.dart';
-import 'package:nexus_app/src/features/models/model_file_verifier.dart';
-
 
 class _FakeModelFileVerifier implements ModelFileVerifier {
   const _FakeModelFileVerifier(this.result);
@@ -28,7 +27,20 @@ class _MemoryModelStore implements ModelStore {
   @override
   Future<void> register(ModelRecord model) async => records.add(model);
   @override
-  Future<void> updateInstallState(String id, {required ModelInstallStatus status, String? localPath, int? sizeBytes, String? architecture, String? ggufModelName, String? tokenizerModel, int? contextLength, int? blockCount, int? embeddingLength, int? fileType, int? parameterCount}) async {}
+  Future<void> updateInstallState(
+    String id, {
+    required ModelInstallStatus status,
+    String? localPath,
+    int? sizeBytes,
+    String? architecture,
+    String? ggufModelName,
+    String? tokenizerModel,
+    int? contextLength,
+    int? blockCount,
+    int? embeddingLength,
+    int? fileType,
+    int? parameterCount,
+  }) async {}
 }
 
 class _MemoryAgentStore implements AgentStore {
@@ -50,6 +62,23 @@ class _MemoryAgentStore implements AgentStore {
       description: current.description,
       status: current.status,
       modelId: modelId,
+      systemPrompt: current.systemPrompt,
+      createdAtUnixMs: current.createdAtUnixMs,
+    );
+  }
+
+  @override
+  Future<void> updateSystemPrompt(String id, String systemPrompt) async {
+    final index = records.indexWhere((agent) => agent.id == id);
+    if (index < 0) throw StateError('Agent does not exist: $id');
+    final current = records[index];
+    records[index] = AgentRecord(
+      id: current.id,
+      name: current.name,
+      description: current.description,
+      status: current.status,
+      modelId: current.modelId,
+      systemPrompt: systemPrompt,
       createdAtUnixMs: current.createdAtUnixMs,
     );
   }
@@ -85,6 +114,7 @@ class _MemoryAgentStore implements AgentStore {
       description: current.description,
       status: status,
       modelId: current.modelId,
+      systemPrompt: current.systemPrompt,
       createdAtUnixMs: current.createdAtUnixMs,
     );
   }
@@ -115,7 +145,7 @@ void main() {
 
     expect(find.text('جاهز'), findsOneWidget);
     expect(
-      find.text('جاهز كإعداد فقط؛ لا يوجد محرك استدلال متصل حالياً.'),
+      find.text('يمكن استخدام تعليماته في المحادثة عند اختياره.'),
       findsOneWidget,
     );
     expect(store.records.single.status, AgentRecordStatus.ready);
@@ -164,14 +194,22 @@ void main() {
       ));
     final models = _MemoryModelStore([
       ModelRecord(
-        id: 'model-ready', displayName: 'نموذج مثبت',
-        runtime: ModelRuntime.llamaCpp, status: ModelInstallStatus.installed,
-        localPath: '/models/ready.gguf', createdAtUnixMs: 1, updatedAtUnixMs: 1,
+        id: 'model-ready',
+        displayName: 'نموذج مثبت',
+        runtime: ModelRuntime.llamaCpp,
+        status: ModelInstallStatus.installed,
+        localPath: '/models/ready.gguf',
+        createdAtUnixMs: 1,
+        updatedAtUnixMs: 1,
       ),
       ModelRecord(
-        id: 'model-pending', displayName: 'نموذج غير مثبت',
-        runtime: ModelRuntime.llamaCpp, status: ModelInstallStatus.registered,
-        localPath: '/models/pending.gguf', createdAtUnixMs: 1, updatedAtUnixMs: 1,
+        id: 'model-pending',
+        displayName: 'نموذج غير مثبت',
+        runtime: ModelRuntime.llamaCpp,
+        status: ModelInstallStatus.registered,
+        localPath: '/models/pending.gguf',
+        createdAtUnixMs: 1,
+        updatedAtUnixMs: 1,
       ),
     ]);
     await tester.pumpWidget(MaterialApp(
@@ -246,6 +284,40 @@ void main() {
       find.textContaining('لم يتم الربط؛ فشل التحقق من ملف النموذج'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('agent system instructions can be edited and saved',
+      (tester) async {
+    final store = _MemoryAgentStore()
+      ..records.add(AgentRecord(
+        id: 'agent-instructions',
+        name: 'وكيل التلخيص',
+        description: '',
+        status: AgentRecordStatus.ready,
+        createdAtUnixMs: 10,
+      ));
+    await tester.pumpWidget(
+      MaterialApp(home: AgentsPage(repository: store)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('إجراءات الوكيل'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('تعليمات الوكيل'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField),
+      'لخّص النصوص بالعربية، واذكر النقاط الرئيسية فقط.',
+    );
+    await tester.tap(find.text('حفظ التعليمات'));
+    await tester.pumpAndSettle();
+
+    expect(
+      store.records.single.systemPrompt,
+      'لخّص النصوص بالعربية، واذكر النقاط الرئيسية فقط.',
+    );
+    expect(find.text('له تعليمات مخصصة'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('cancelling agent creation closes the form cleanly',

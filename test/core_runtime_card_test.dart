@@ -11,7 +11,7 @@ class _FakeRuntimeService implements CoreRuntimeService {
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '0.9.0',
-        stage: 'alpha-1.9-multi-turn-context',
+        stage: 'alpha-2.6.2-peer-task-transfer',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-unavailable',
         inferenceAvailable: false,
@@ -29,7 +29,7 @@ class _LoadedRuntimeService implements CoreRuntimeService {
   Future<CoreRuntimeStatus> inspect() async => const CoreRuntimeStatus(
         coreName: 'NEXUS AI',
         coreVersion: '1.7.0',
-        stage: 'alpha-1.9-multi-turn-context',
+        stage: 'alpha-2.6.2-peer-task-transfer',
         bridgeConnected: true,
         runtimeEngine: 'llama.cpp-native-initialized',
         inferenceAvailable: false,

@@ -1,12 +1,56 @@
-# NEXUS AI — Alpha 1.9.6: Widget test scroll finder correction
+# NEXUS AI — Alpha 2.6.2: Peer task proposal transport
+
+## Alpha 2.6.2 — Encrypted task proposal transport
+
+Explicitly paired devices can now exchange durable task proposals through their existing AES-256-GCM sequenced peer channel. Outgoing proposals are written to a local SQLite outbox before network send, correlate acknowledgements by transfer ID, and remain queued for a later reconnect if delivery is interrupted. The receiver validates the envelope and SHA-256 payload digest, checks the plan structure and dependency DAG, then asks the user to approve or reject that specific proposal before storage. The approval dialog expires after 60 seconds; no decision leaves the sender's outbox queued for retry. An approved proposal is committed locally as `kept` before the positive acknowledgement is sent; an explicit rejection is also persisted as `declined`, so duplicate deliveries replay the same decision without reopening the prompt. Exact duplicate delivery is idempotent; reuse of an ID with different data is rejected. A rejected or permanently invalid proposal is not retried automatically. Keeping a proposal does not import remote agents, execute steps, transfer model files or enable distributed inference. The current proposal frame payload ceiling is 512 KiB to stay below the encrypted 1 MiB frame envelope; file attachments and chunked transfer are future work. SQLite schema v10 adds the durable inbox/outbox.
+
+## Previous milestone — Alpha 2.6.1: Local discovery and QR pairing
+
+NEXUS retains the authenticated encrypted TCP pairing protocol from Alpha 2.6.0 and adds opt-in IPv4 UDP broadcast discovery on a separate port, time-limited QR invitations, an in-app camera scanner with clipboard fallback, and interface-change detection. Discovery advertisements contain only a nonce, device identity label, platform and TCP port; they never contain the pairing secret. Each result is treated as untrusted until a known secure pairing key validates the remote identity, or an invitation QR is scanned and the existing challenge/HMAC/X25519 handshake succeeds. A scanned invitation is shown for explicit user confirmation; the host still approves first-time pairing. The local-device discovery socket is closed when neither an invitation nor a scan is active. UDP discovery is best-effort: a blocked broadcast socket does not disable QR or manual pairing. Probe replies are rate-limited per source and the source cache is bounded. Interface changes refresh invite addresses and clear stale discovery results. Manual IPv4 entry remains available. This phase does not add remote task execution, file/model transfer or distributed inference. Android target SDK remains 36 until the Android 17 / SDK 37 `ACCESS_LOCAL_NETWORK` runtime permission flow is implemented. QR scanning uses bundled ML Kit on Android and adds approximately 3–10 MB to the app package. See `docs/development/ALPHA_2_6_1_NETWORK_DISCOVERY_QR.md`.
+
+## Previous milestone — Alpha 2.6.0: Secure local device connectivity
+
+Alpha 2.6.0 introduced explicit local TCP listening, one-time 256-bit pairing secrets, host approval, X25519/HMAC/HKDF key agreement, AES-256-GCM sequenced frames, secure-storage key persistence, SQLite v9 peer metadata and read-only capability/ping exchanges. See `docs/development/ALPHA_2_6_LOCAL_DEVICE_NETWORKING.md`.
+
+## Previous milestone — Alpha 2.5.0: Multi-agent orchestration
+
+### Alpha 2.5.0 scope
+
+NEXUS can now build a strict JSON plan with a selected local planner agent, validate ready-agent assignments and dependency cycles, and show the proposed plan before saving or execution. Plans, task steps, outputs, interruption states and an append-only event trace persist locally in SQLite schema v8 and are visible in task history. Planner output cannot silently replace the original user goal. See `docs/development/ALPHA_2_5_MULTI_AGENT_ORCHESTRATION.md` for details. Execution is sequential because the current runtime intentionally owns one llama.cpp model session; the model manager safely switches between agents' installed model assignments. Agents receive typed handoffs containing only declared dependency outputs, explicitly framed as untrusted data. Child agents cannot recursively delegate or request shell/network execution. Failed prerequisites block dependent steps while independent steps may continue. Native generation can be cancelled, and interrupted/cancelled tasks can be explicitly resumed.
+
+Balanced, Performance and Unrestricted resource modes control plan-size and output budgets; the actual model context window still governs handoff size. Parallel model execution, nested delegation, delegated tool calls and distributed agents are not included.
+
+## Alpha 2.4.1 — Adaptive resource policy and unrestricted mode
+
+NEXUS now offers three local resource modes: Balanced, Performance, and Unrestricted. The selected mode is stored locally in SQLite schema v7 and applied to imports, knowledge retrieval, conversation transport, and local tool execution. Balanced and Performance import/search budgets are calculated from the current Android `MemAvailable` value rather than fixed per-file or per-library quotas. Unrestricted mode opts out of those pre-budgets entirely. The knowledge library no longer caps the number of documents, total indexed characters, or chunk count; Balanced and Performance chunking follows its dynamic import budget, while Unrestricted continues without an application pre-budget until processing completes or the operating system intervenes. Unrestricted mode removes fixed result, per-document, conversation-count, conversation-byte, tool-input/output, and per-turn tool-call budgets. The local allow-list, typed tool validation, explicit approval checks for modifying/external tools, per-tool execution timeout, cancellation, model context window, Android memory, and storage capacity remain real constraints.
+
+The native transport boundary now allows up to 4,096 role-aware messages and 1 MiB of combined message content before llama.cpp performs tokenizer-accurate trimming against the active model context. This is a bridge safety ceiling, not an application quota. It prevents unbounded allocation at the Dart/Rust/C++ boundary while no longer forcing conversations to stop at 64 messages or 64 KiB. Search query terms are limited to 128 per SQL request because each term is bound twice and SQLite must remain below its portable bind-variable ceiling.
+
+## Alpha 2.4.0 — Local knowledge library and lexical retrieval
+
+The previous milestone added an on-device TXT/Markdown library, Arabic text normalization, overlapping chunks, deterministic BM25-style lexical retrieval, source numbering, and untrusted-source framing. Alpha 2.4.1 removes fixed file/document/library/chunk/candidate/result/prompt quotas. Balanced and Performance budgets are sized from the live memory snapshot or active model context. Unrestricted mode removes the importer and retrieval pre-budgets entirely; the user accepts the risk of Android terminating the process under memory pressure. Model files no longer have a default 8 GiB Flutter-side ceiling; native memory preflight remains authoritative. The current native runtime still has an explicit context ceiling of 4,096 tokens, an output ceiling of 1,024 tokens, and a transport envelope of 1 MiB / 4,096 messages; these are existing engine limits, not cloud quotas, and require a separate native-context expansion milestone.
+
+## Alpha 2.3.0 — Autonomous local tool calling (previous milestone)
 
 
-## Alpha 1.9.6 Widget test scroll finder correction
+NEXUS AI now includes a versioned allow-list of offline tools exposed through explicit chat commands. Alpha 2.2.0 adds a safe arithmetic parser, local date/time and text statistics, per-turn call budgets, bounded JSON inputs and outputs, timeouts, explicit approval gates for future modifying tools, and durable tool-role audit messages. Arabic command aliases and Arabic/Persian numeral normalization are supported. Output truncation counts Unicode code points and records cooperative cancellation distinctly from rejection. These commands work without loading a GGUF model. Alpha 2.3 adds a strict JSON envelope for model-requested calls to the allow-listed read-only tools. The app validates the complete response, checks the tool schema and per-turn budget, executes locally, persists the assistant request and tool result as separate role-aware messages, then returns the result to the model for a follow-up response. Tool calls are sequential, capped at three per user turn, cancellable, and never execute prose, Markdown fences, shell commands, arbitrary code, network requests or unregistered tools.
 
-The dashboard shell widget test now calls `scrollUntilVisible` without supplying a `Scrollable` type finder. Flutter Test resolves the default scrollable internally, so the test no longer has a direct symbol dependency that caused the repeated undefined-identifier failure. The Alpha 1.9.5 inference-page lint corrections are retained. Flutter analysis and tests remain mandatory parallel gates; no gate was weakened or skipped.
 
-NEXUS is a local-first personal AI platform. Alpha 1.9 connects the durable SQLite conversation history to the active GGUF model as role-aware messages. Flutter selects completed turns, Rust validates and marshals the messages, and the native llama.cpp adapter applies the GGUF chat template and counts the resulting tokens. When the formatted prompt plus requested output does not fit, the adapter removes oldest complete turns while preserving system messages and the current user message.
+NEXUS carries each ready agent's system persona into native model inference and persists the selected agent with the conversation. Alpha 2.1.1 adds explicit model routing from the model library: the target GGUF is verified before the current session is unloaded, the new model is loaded under one-session limits, and a failed target load triggers an attempt to restore the previous model. If restoration cannot be confirmed, the runtime enters a recovery-required state and blocks inference until an explicit unload succeeds.
 
+A generation lease protects the active native session while inference runs. Model prepare, load, switch and unload operations are rejected during generation; the lease is released only after the native stream reports a terminal event or error. The model library exposes a confirmed model-switch action and a recovery unload action. The chat page can also switch to a ready agent's assigned, installed local model after explicit confirmation. The Android target remains ARM64 CPU inference with one active model session.
+
+Semantic/vector retrieval, PDF and DOCX extraction, distributed task execution and inference, GPU offload, and vision/audio remain future milestones.
+
+## Alpha 2.0.0 — Agent personas and conversation binding (base milestone)
+
+See `docs/development/ALPHA_2_0_AGENT_PERSONAS.md` for the original persona and conversation-binding scope.
+
+## Alpha 1.9.6 — Widget test scroll finder correction
+
+The dashboard shell widget test calls `scrollUntilVisible` without directly referencing the `Scrollable` type. Flutter Test resolves the default scrollable internally, removing the direct symbol dependency that caused the repeated undefined-identifier failure. Flutter analysis and tests remain mandatory parallel gates; no gate is weakened or skipped.
+
+NEXUS is a local-first personal AI platform. Alpha 1.9 connects durable SQLite conversation history to the active GGUF model as role-aware messages. Flutter selects completed turns, Rust validates and marshals messages, and the native llama.cpp adapter applies the GGUF chat template and counts the resulting tokens. Alpha 2.0 adds durable agent personas and conversation-to-agent binding on top of that inference path.
 
 ## Alpha 1.9.3 Clippy host-stub lint fix
 
@@ -51,7 +95,7 @@ The current UI exposes a **المحادثة** page with local conversation histo
 - Context size: 512–4096 tokens; CPU threads: 1–8.
 - Decoder-only text models are supported; encoder/decoder and diffusion models are rejected. Embedded templates must be supported by the pinned llama.cpp helper or an explicit template error is returned.
 - Single-file GGUF only. Split GGUF shards, tool execution, vision/audio input, GPU offload, and distributed inference are not part of this milestone. Tool-role messages are transport-capable but no tool execution engine is exposed.
-- The host C ABI contract test uses a fake llama API. Only CI's pinned Android NDK build and a physical-device smoke test can verify the actual engine integration.
+- The host C ABI contract test uses a fake llama API. Alpha 2.3 resumes generation after a tool result; if a GGUF chat template rejects the generic `tool` role, the adapter retries with a clearly marked, data-only user message while SQLite retains the original `tool` role. Only CI's pinned Android NDK build and a physical-device smoke test can verify the actual engine integration.
 
 
 ## Native model-loading foundation (Alpha 1.6)
@@ -82,9 +126,18 @@ GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles th
 
 The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-Flutter package version: `1.9.6+32`; Rust workspace version: `1.9.6`.
+Flutter package version: `2.6.2+43`; Rust workspace version: `2.6.2`. SQLite database version: `10` (includes local resource settings, knowledge library, orchestration tables, paired devices, and durable peer task inbox/outbox).
 
-See `docs/development/ALPHA_1_9_MULTI_TURN_CONTEXT.md`,
+See `docs/development/ALPHA_2_6_2_PEER_TASK_TRANSFER.md`,
+`docs/development/ALPHA_2_6_1_NETWORK_DISCOVERY_QR.md`,
+`docs/development/ALPHA_2_6_LOCAL_DEVICE_NETWORKING.md`,
+`docs/development/ALPHA_2_5_MULTI_AGENT_ORCHESTRATION.md`,
+`docs/development/ALPHA_2_3_AUTONOMOUS_TOOL_CALLING.md`,
+`docs/development/ALPHA_2_2_LOCAL_TOOLS.md`,
+`docs/development/ALPHA_2_1_AGENT_MODEL_ROUTING.md`,
+`docs/development/ALPHA_2_0_AGENT_PERSONAS.md`,
+`docs/development/ROADMAP_POST_ALPHA_2_0.md` for the remaining milestones,
+`docs/development/ALPHA_1_9_MULTI_TURN_CONTEXT.md`,
 `docs/development/ALPHA_1_8_LOCAL_CONVERSATION_HISTORY.md`,
 `docs/development/ALPHA_1_7_REAL_TEXT_GENERATION.md`,
 `docs/development/ALPHA_1_6_GGUF_MODEL_LOADING.md`, and
@@ -306,3 +359,10 @@ Alpha 1.9 passes completed `system`, `user`, `assistant`, and `tool` messages fr
 The formatted prompt is tokenized with the loaded model vocabulary. If prompt tokens plus the requested completion exceed the actual loaded context, the adapter removes the oldest complete user/assistant turn and re-applies the model template until the request fits. System messages and the newest user message are retained. The terminal stream event reports how many messages were removed so the UI can show a non-error context notice. Context KV memory is still cleared after each call; multi-turn state is reconstructed from local history on each request, not retained in native memory.
 
 The host C ABI contract test uses a fake llama API and verifies multi-role template input, current-user turn validation, context overflow, old-turn trimming, cancellation, and the trim count. This is a deterministic contract test only; GitHub Actions must still generate FRB bindings, run Rust and Flutter gates, and compile the pinned upstream llama.cpp adapter for Android ARM64. A physical-device test is still required to validate model-specific template behaviour and memory use.
+
+## Alpha 2.4.0 historical scope (superseded by Alpha 2.4.1 resource policy)
+
+- Indexed formats: UTF-8 TXT, Markdown (`.md` and `.markdown`). PDF, DOCX, images, OCR, embeddings, and vector search are not implemented in this milestone.
+- Alpha 2.4.0 initially shipped conservative per-file, library, candidate, result, and prompt quotas. Alpha 2.4.1 supersedes those fixed application quotas with the selected resource profile: Balanced and Performance use memory-aware budgets, while Unrestricted removes the artificial importer and retrieval pre-budgets.
+- Documents are split into overlapping 1,200-character chunks with a 160-character overlap. Original source files are not copied into the app database; text chunks and normalized search forms are stored locally.
+- Local text excerpts are untrusted data. Tool instructions found inside a source are never executed.

@@ -1,7 +1,7 @@
 name: nexus_app
 description: Local-first personal distributed AI platform.
 publish_to: none
-version: 1.9.6+32
+version: 2.6.2+43
 environment:
   sdk: '>=3.13.0 <4.0.0'
   flutter: '>=3.47.0'
@@ -15,6 +15,10 @@ dependencies:
   path: ^1.9.1
   file_picker: ^10.3.10
   path_provider: ^2.1.5
+  cryptography: ^2.9.0
+  flutter_secure_storage: ^11.2.0
+  mobile_scanner: ^7.5.0
+  qr: ^4.0.1
   rust_lib_nexus_app:
     path: rust_builder
 dev_dependencies:

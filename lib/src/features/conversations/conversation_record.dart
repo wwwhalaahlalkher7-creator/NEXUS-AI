@@ -9,6 +9,7 @@ class ConversationRecord {
     required this.createdAtUnixMs,
     required this.updatedAtUnixMs,
     this.lastMessagePreview = '',
+    this.agentId,
   });
 
   final String id;
@@ -16,6 +17,7 @@ class ConversationRecord {
   final int createdAtUnixMs;
   final int updatedAtUnixMs;
   final String lastMessagePreview;
+  final String? agentId;
 
   Map<String, Object?> toMap() => {
         'id': id,
@@ -23,6 +25,7 @@ class ConversationRecord {
         'created_at_unix_ms': createdAtUnixMs,
         'updated_at_unix_ms': updatedAtUnixMs,
         'last_message_preview': lastMessagePreview,
+        'agent_id': agentId,
       };
 
   factory ConversationRecord.fromMap(Map<String, Object?> map) {
@@ -32,6 +35,7 @@ class ConversationRecord {
       createdAtUnixMs: map['created_at_unix_ms']! as int,
       updatedAtUnixMs: map['updated_at_unix_ms']! as int,
       lastMessagePreview: map['last_message_preview']! as String,
+      agentId: map['agent_id'] as String?,
     );
   }
 }

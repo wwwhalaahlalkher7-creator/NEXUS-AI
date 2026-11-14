@@ -9,11 +9,12 @@ class _FakeVerifier implements ModelFileVerifier {
   _FakeVerifier(this.result);
 
   final ModelFileVerification result;
+  final Map<String, ModelFileVerification> resultsByModelId = {};
   Completer<ModelFileVerification>? completer;
 
   @override
   Future<ModelFileVerification> verify(ModelRecord model) =>
-      completer?.future ?? Future.value(result);
+      completer?.future ?? Future.value(resultsByModelId[model.id] ?? result);
 }
 
 class _FakeBackend implements ModelRuntimeBackend {
@@ -22,6 +23,8 @@ class _FakeBackend implements ModelRuntimeBackend {
   int unloadCalls = 0;
   bool failLoad = false;
   bool failUnload = false;
+  final Set<String> failLoadModelIds = {};
+  String? loadedModelId;
   int? returnedContextTokens;
   int? lastContextTokens;
   int? lastThreads;
@@ -38,9 +41,10 @@ class _FakeBackend implements ModelRuntimeBackend {
     loadCalls++;
     lastContextTokens = contextTokens;
     lastThreads = threads;
-    if (failLoad) {
-      throw StateError('backend load failed');
+    if (failLoad || failLoadModelIds.contains(model.id)) {
+      throw StateError('backend load failed for ${model.id}');
     }
+    loadedModelId = model.id;
     return returnedContextTokens ?? contextTokens;
   }
 
@@ -50,6 +54,7 @@ class _FakeBackend implements ModelRuntimeBackend {
     if (failUnload) {
       throw StateError('backend unload failed');
     }
+    loadedModelId = null;
   }
 }
 
@@ -196,7 +201,23 @@ void main() {
     expect(result.message, contains('backend load failed'));
   });
 
-  test('rejects a model file that exceeds the configured byte ceiling', () async {
+  test('does not impose a default model-file byte ceiling', () async {
+    final manager = ModelRuntimeManager(
+      verifier: _FakeVerifier(const ModelFileVerification(
+        isValid: true,
+        actualSizeBytes: 9 * 1024 * 1024 * 1024,
+        message: 'valid',
+      )),
+      backend: _FakeBackend(),
+    );
+
+    final result = await manager.prepare(_model());
+
+    expect(result.state, ModelSessionState.readyToLoad);
+    expect(result.modelFileBytes, 9 * 1024 * 1024 * 1024);
+  });
+
+  test('honors an explicit model-file byte ceiling when configured', () async {
     final manager = ModelRuntimeManager(
       verifier: _FakeVerifier(const ModelFileVerification(
         isValid: true,
@@ -210,7 +231,7 @@ void main() {
     final result = await manager.prepare(_model());
 
     expect(result.state, ModelSessionState.failed);
-    expect(result.message, contains('يتجاوز حد السياسة'));
+    expect(result.message, contains('حد السياسة المخصص'));
   });
 
   test('rejects external models from the local llama.cpp runtime path', () async {
@@ -242,6 +263,191 @@ void main() {
 
     expect(manager.snapshot.state, ModelSessionState.loaded);
     expect(manager.snapshot.modelId, 'model-1');
+  });
+
+
+  test('switchTo loads an assigned model when no session is active', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    final loaded = await manager.switchTo(_model());
+
+    expect(loaded.state, ModelSessionState.loaded);
+    expect(loaded.modelId, 'model-1');
+    expect(backend.loadedModelId, 'model-1');
+    expect(backend.loadCalls, 1);
+    expect(backend.unloadCalls, 0);
+    expect(manager.isBusy, isFalse);
+  });
+
+  test('switchTo unloads the old session and loads the verified target', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    final switched = await manager.switchTo(_model(id: 'model-2'));
+
+    expect(switched.state, ModelSessionState.loaded);
+    expect(switched.modelId, 'model-2');
+    expect(backend.loadedModelId, 'model-2');
+    expect(backend.unloadCalls, 1);
+    expect(backend.loadCalls, 2);
+  });
+
+  test('switchTo keeps the same model without unloading or reloading it', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    final loaded = await manager.loadPrepared(_model());
+    final same = await manager.switchTo(_model());
+
+    expect(same.modelId, loaded.modelId);
+    expect(same.state, ModelSessionState.loaded);
+    expect(backend.loadCalls, 1);
+    expect(backend.unloadCalls, 0);
+  });
+
+  test('failed old-session unload prevents the target load', () async {
+    final backend = _FakeBackend()..failUnload = true;
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    final result = await manager.switchTo(_model(id: 'model-2'));
+
+    expect(result.state, ModelSessionState.loaded);
+    expect(result.modelId, 'model-1');
+    expect(result.message, contains('تعذر تفريغ النموذج الحالي'));
+    expect(backend.loadCalls, 1);
+    expect(backend.loadedModelId, 'model-1');
+  });
+
+  test('invalid target is rejected before unloading the current model', () async {
+    final verifier = _validVerifier()
+      ..resultsByModelId['model-2'] = const ModelFileVerification(
+        isValid: false,
+        actualSizeBytes: 1024,
+        message: 'invalid target file',
+      );
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: verifier,
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    final result = await manager.switchTo(_model(id: 'model-2'));
+
+    expect(result.state, ModelSessionState.loaded);
+    expect(result.modelId, 'model-1');
+    expect(result.message, contains('invalid target file'));
+    expect(backend.unloadCalls, 0);
+    expect(backend.loadedModelId, 'model-1');
+  });
+
+  test('failed target load restores the previous model session', () async {
+    final backend = _FakeBackend()..failLoadModelIds.add('model-2');
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    final result = await manager.switchTo(_model(id: 'model-2'));
+
+    expect(result.state, ModelSessionState.loaded);
+    expect(result.modelId, 'model-1');
+    expect(
+      result.message,
+      contains('تمت استعادة النموذج السابق'),
+    );
+    expect(backend.loadedModelId, 'model-1');
+    expect(backend.loadCalls, 3);
+  });
+
+  test('generation lease requires a loaded model and rejects a second lease', () async {
+    final manager = ModelRuntimeManager(verifier: _validVerifier());
+
+    expect(() => manager.beginGeneration(), throwsA(isA<StateError>()));
+    expect(manager.isGenerating, isFalse);
+
+    await manager.prepare(_model());
+    expect(() => manager.beginGeneration(), throwsA(isA<StateError>()));
+
+    // No native model was loaded by preflight, so the manager still denies
+    // generation until loadPrepared has completed successfully.
+    expect(manager.snapshot.isLoaded, isFalse);
+  });
+
+  test('generation lease blocks unload and model switching until released', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    manager.beginGeneration();
+
+    expect(manager.isGenerating, isTrue);
+    await expectLater(manager.prepare(_model()), throwsA(isA<StateError>()));
+    await expectLater(
+      manager.loadPrepared(_model()),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(manager.unload(), throwsA(isA<StateError>()));
+    await expectLater(
+      manager.switchTo(_model(id: 'model-2')),
+      throwsA(isA<StateError>()),
+    );
+    expect(backend.unloadCalls, 0);
+    expect(manager.snapshot.modelId, 'model-1');
+
+    manager.endGeneration();
+    manager.endGeneration();
+    expect(manager.isGenerating, isFalse);
+    expect((await manager.unload()).state, ModelSessionState.idle);
+  });
+
+  test('recoveryRequired can be cleared after the backend is unloaded', () async {
+    final backend = _FakeBackend();
+    final manager = ModelRuntimeManager(
+      verifier: _validVerifier(),
+      backend: backend,
+    );
+
+    await manager.prepare(_model());
+    await manager.loadPrepared(_model());
+    backend.failLoadModelIds.addAll({'model-1', 'model-2'});
+    final failedSwitch = await manager.switchTo(_model(id: 'model-2'));
+    expect(failedSwitch.state, ModelSessionState.recoveryRequired);
+    await expectLater(
+      manager.prepare(_model(id: 'model-3')),
+      throwsA(isA<StateError>()),
+    );
+    expect(manager.snapshot.state, ModelSessionState.recoveryRequired);
+
+    backend.failLoadModelIds.clear();
+    final cleared = await manager.unload();
+    expect(cleared.state, ModelSessionState.idle);
+    expect(backend.loadedModelId, isNull);
   });
 
   test('prevents overlapping runtime operations', () async {

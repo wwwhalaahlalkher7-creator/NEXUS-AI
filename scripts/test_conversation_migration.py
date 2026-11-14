@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Execute the SQL embedded in the Dart v4 message migration against SQLite."""
+"""Execute the historical Dart v4 message migration against SQLite."""
 from pathlib import Path
 import re
 import sqlite3
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "lib/src/data/local_database.dart").read_text(encoding="utf-8")
-if not re.search(r"static const _databaseVersion = 4;", SOURCE):
-    raise SystemExit("SQLite database version must be 4")
+version_match = re.search(r"static const _databaseVersion = (\d+);", SOURCE)
+if not version_match or int(version_match.group(1)) < 4:
+    raise SystemExit("SQLite database version must retain the v4 message migration")
 
 old_message_match = re.search(
     r"await db\.execute\('''\s*(CREATE TABLE messages \(.*?\))\s*'''\);",

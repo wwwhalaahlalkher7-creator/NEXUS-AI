@@ -70,7 +70,7 @@ pub fn get_core_info() -> CoreInfo {
     CoreInfo {
         name: "NEXUS AI",
         version: env!("CARGO_PKG_VERSION"),
-        stage: "alpha-1.9-multi-turn-context",
+        stage: "alpha-2.6.2-peer-task-transfer",
     }
 }
 
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn core_info_has_expected_stage() {
-        assert_eq!(get_core_info().stage, "alpha-1.9-multi-turn-context");
+        assert_eq!(get_core_info().stage, "alpha-2.6.2-peer-task-transfer");
     }
 
     #[test]

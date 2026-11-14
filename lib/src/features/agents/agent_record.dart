@@ -8,6 +8,7 @@ class AgentRecord {
     required this.status,
     required this.createdAtUnixMs,
     this.modelId,
+    this.systemPrompt = '',
   });
 
   final String id;
@@ -15,6 +16,7 @@ class AgentRecord {
   final String description;
   final AgentRecordStatus status;
   final String? modelId;
+  final String systemPrompt;
   final int createdAtUnixMs;
 
   String get statusValue => status.name;
@@ -25,6 +27,7 @@ class AgentRecord {
         'description': description,
         'status': statusValue,
         'model_id': modelId,
+        'system_prompt': systemPrompt,
         'created_at_unix_ms': createdAtUnixMs,
       };
 
@@ -35,6 +38,7 @@ class AgentRecord {
       description: map['description']! as String,
       status: AgentRecordStatus.values.byName(map['status']! as String),
       modelId: map['model_id'] as String?,
+      systemPrompt: map['system_prompt'] as String? ?? '',
       createdAtUnixMs: map['created_at_unix_ms']! as int,
     );
   }

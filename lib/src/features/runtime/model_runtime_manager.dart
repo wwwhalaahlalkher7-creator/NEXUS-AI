@@ -9,28 +9,23 @@ enum ModelSessionState {
   readyToLoad,
   loading,
   loaded,
+  switching,
   unloading,
+  recoveryRequired,
   failed,
 }
 
 class ModelRuntimePolicy {
   const ModelRuntimePolicy({
-    this.maxModelFileBytes = 8 * 1024 * 1024 * 1024,
+    this.maxModelFileBytes,
     this.maxContextTokens = 4096,
     this.contextTokens = 2048,
     this.cpuThreads = 4,
   });
 
-  /// File-size ceiling. Native loading also applies a live available-memory check.
-  final int maxModelFileBytes;
-
-  /// Maximum context NEXUS is willing to allocate on the first mobile runtime.
+  final int? maxModelFileBytes;
   final int maxContextTokens;
-
-  /// Conservative default context for RAM-constrained Android devices.
   final int contextTokens;
-
-  /// CPU threads used for prompt evaluation and token generation.
   final int cpuThreads;
 }
 
@@ -58,6 +53,15 @@ class ModelSessionSnapshot {
 
   bool get isPrepared => state == ModelSessionState.readyToLoad;
   bool get isLoaded => state == ModelSessionState.loaded;
+  bool get needsRecovery => state == ModelSessionState.recoveryRequired;
+
+  ModelSessionSnapshot withMessage(String value) => ModelSessionSnapshot(
+        state: state,
+        message: value,
+        modelId: modelId,
+        modelFileBytes: modelFileBytes,
+        contextTokens: contextTokens,
+      );
 }
 
 abstract interface class ModelRuntimeBackend {
@@ -72,7 +76,6 @@ abstract interface class ModelRuntimeBackend {
   Future<void> unload();
 }
 
-/// Used on unsupported platforms or when a native backend is not injected.
 class UnavailableModelRuntimeBackend implements ModelRuntimeBackend {
   const UnavailableModelRuntimeBackend();
 
@@ -95,8 +98,8 @@ class UnavailableModelRuntimeBackend implements ModelRuntimeBackend {
       );
 }
 
-/// Coordinates exactly one local model session and never equates preflight
-/// validation with a successful native model load.
+/// Owns the single native model session and serializes all lifecycle changes.
+/// A generation lease prevents unload/switch while native inference is active.
 class ModelRuntimeManager extends ChangeNotifier {
   ModelRuntimeManager({
     required ModelFileVerifier verifier,
@@ -105,7 +108,8 @@ class ModelRuntimeManager extends ChangeNotifier {
   })  : _verifier = verifier,
         _backend = backend,
         _policy = policy {
-    if (_policy.maxModelFileBytes <= 0 ||
+    if ((_policy.maxModelFileBytes != null &&
+            _policy.maxModelFileBytes! <= 0) ||
         _policy.maxContextTokens < 512 ||
         _policy.contextTokens < 512 ||
         _policy.contextTokens > _policy.maxContextTokens ||
@@ -120,13 +124,50 @@ class ModelRuntimeManager extends ChangeNotifier {
   final ModelRuntimePolicy _policy;
 
   ModelSessionSnapshot _snapshot = const ModelSessionSnapshot.idle();
+  ModelRecord? _activeModel;
   bool _operationInProgress = false;
+  bool _generationInProgress = false;
   bool _disposed = false;
 
   ModelSessionSnapshot get snapshot => _snapshot;
+  bool get engineAvailable => _backend.isAvailable;
+  bool get isBusy => _operationInProgress;
+  bool get isGenerating => _generationInProgress;
 
   void _publish(ModelSessionSnapshot snapshot) {
     _snapshot = snapshot;
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
+
+  /// Acquire synchronously before the first await in a generation turn.
+  /// Throws when a lifecycle operation is active or no model is loaded.
+  void beginGeneration() {
+    if (_disposed) {
+      throw StateError('مدير جلسة النموذج لم يعد نشطاً.');
+    }
+    if (_operationInProgress) {
+      throw StateError('انتظر انتهاء إجراء إدارة النموذج قبل التوليد.');
+    }
+    if (_generationInProgress) {
+      throw StateError('يوجد توليد آخر قيد التنفيذ.');
+    }
+    if (!_snapshot.isLoaded) {
+      throw StateError('لا يوجد نموذج محمّل لبدء التوليد.');
+    }
+    _generationInProgress = true;
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
+
+  /// Releases the generation lease. Safe to call more than once.
+  void endGeneration() {
+    if (!_generationInProgress) {
+      return;
+    }
+    _generationInProgress = false;
     if (!_disposed) {
       notifyListeners();
     }
@@ -138,68 +179,30 @@ class ModelRuntimeManager extends ChangeNotifier {
     super.dispose();
   }
 
-  bool get engineAvailable => _backend.isAvailable;
-  bool get isBusy => _operationInProgress;
-
   Future<ModelSessionSnapshot> prepare(ModelRecord model) async {
     _beginOperation();
     try {
+      if (_snapshot.needsRecovery) {
+        throw StateError('يجب استعادة المحرك بتفريغه قبل تجهيز نموذج آخر.');
+      }
       if (_snapshot.state == ModelSessionState.loaded) {
         if (_snapshot.modelId == model.id) {
           return _snapshot;
         }
-        throw StateError('يوجد نموذج آخر محمّل. أفرغه قبل تجهيز نموذج مختلف.');
+        throw StateError('يوجد نموذج آخر محمّل. استخدم التبديل الصريح للنموذج.');
       }
-
       _publish(ModelSessionSnapshot(
         state: ModelSessionState.checking,
         message: 'جارٍ التحقق من ملف النموذج وسياسة الموارد…',
         modelId: model.id,
       ));
-      if (model.runtime != ModelRuntime.llamaCpp) {
-        return _fail(model, 'هذا الإصدار يدعم تشغيل نماذج llama.cpp المحلية فقط.');
-      }
-
-      final verification = await _verifier.verify(model);
-      if (!verification.isValid) {
-        return _fail(model, verification.message);
-      }
-
-      final actualSize = verification.actualSizeBytes ?? model.sizeBytes;
-      if (actualSize == null || actualSize <= 0) {
-        return _fail(model, 'تعذر تحديد الحجم الفعلي لملف النموذج.');
-      }
-      if (actualSize > _policy.maxModelFileBytes) {
-        return _fail(
-          model,
-          'حجم الملف يتجاوز حد السياسة الحالي (${_formatBytes(_policy.maxModelFileBytes)}).',
-        );
-      }
-
-      final requestedContext = _effectiveContextTokens(model);
-      if (requestedContext < 512) {
-        return _fail(model, 'السياق الأقصى المعلن للنموذج أقل من الحد الأدنى المدعوم (512 رمزاً).');
-      }
-      if (requestedContext > _policy.maxContextTokens) {
-        return _fail(
-          model,
-          'حجم السياق المطلوب ($requestedContext) يتجاوز حد السياسة الحالي (${_policy.maxContextTokens}) رمزاً.',
-        );
-      }
-
-      _publish(ModelSessionSnapshot(
-        state: ModelSessionState.readyToLoad,
-        message: _backend.isAvailable
-            ? 'اجتاز الملف الفحص. سيُحمّل على CPU بسياق $requestedContext رمزاً بعد فحص الذاكرة المتاحة.'
-            : 'اجتاز الملف الفحص، لكن محرك llama.cpp الأصلي غير متاح على هذه المنصة.',
-        modelId: model.id,
-        modelFileBytes: actualSize,
-        contextTokens: requestedContext,
-      ));
-      return _snapshot;
+      final result = await _inspectModel(model);
+      _publish(result);
+      return result;
     } catch (error) {
-      if (_snapshot.state == ModelSessionState.loaded &&
-          _snapshot.modelId != model.id) {
+      if (_snapshot.needsRecovery ||
+          (_snapshot.state == ModelSessionState.loaded &&
+              _snapshot.modelId != model.id)) {
         rethrow;
       }
       return _fail(model, 'تعذر تهيئة النموذج: $error');
@@ -211,62 +214,198 @@ class ModelRuntimeManager extends ChangeNotifier {
   Future<ModelSessionSnapshot> loadPrepared(ModelRecord model) async {
     _beginOperation();
     try {
+      if (_snapshot.needsRecovery) {
+        throw StateError('يجب استعادة المحرك بتفريغه قبل تحميل نموذج آخر.');
+      }
       if (_snapshot.state != ModelSessionState.readyToLoad ||
           _snapshot.modelId != model.id) {
         return _fail(model, 'يجب اجتياز فحص الجاهزية لهذا النموذج أولاً.');
       }
       if (!_backend.isAvailable) {
-        _publish(ModelSessionSnapshot(
-          state: ModelSessionState.readyToLoad,
-          message: 'النموذج اجتاز الفحص، لكن محرك التحميل الأصلي غير متاح.',
-          modelId: model.id,
-          modelFileBytes: _snapshot.modelFileBytes,
-          contextTokens: _snapshot.contextTokens,
+        _publish(_snapshot.withMessage(
+          'النموذج اجتاز الفحص، لكن محرك التحميل الأصلي غير متاح.',
         ));
         return _snapshot;
       }
-
-      final requestedContext = _snapshot.contextTokens ?? _policy.contextTokens;
+      final context = _snapshot.contextTokens ?? _policy.contextTokens;
       _publish(ModelSessionSnapshot(
         state: ModelSessionState.loading,
         message: 'جارٍ تحميل الأوزان وإنشاء سياق CPU…',
         modelId: model.id,
         modelFileBytes: _snapshot.modelFileBytes,
-        contextTokens: requestedContext,
+        contextTokens: context,
       ));
       final actualContext = await _backend.load(
         model,
-        contextTokens: requestedContext,
+        contextTokens: context,
         threads: _policy.cpuThreads,
       );
-      if (actualContext < 512 || actualContext > _policy.maxContextTokens) {
-        // A backend that returns an impossible context is not trusted. Try to
-        // release it before reporting failure to the UI. If release fails,
-        // preserve the loaded state rather than claiming memory was freed.
-        try {
-          await _backend.unload();
-        } catch (releaseError) {
-          _publish(ModelSessionSnapshot(
-            state: ModelSessionState.loaded,
-            message: 'أعاد المحرك سياقاً خارج السياسة وتعذر تفريغه؛ ما زالت الجلسة محمّلة. أعد محاولة التفريغ: $releaseError',
-            modelId: model.id,
-            modelFileBytes: _snapshot.modelFileBytes,
-            contextTokens: actualContext,
-          ));
-          return _snapshot;
-        }
-        return _fail(model, 'أعاد المحرك حجم سياق غير صالح بعد التحميل.');
+      if (!_isValidReturnedContext(actualContext)) {
+        return await _recoverInvalidLoad(model, actualContext);
       }
-      _publish(ModelSessionSnapshot(
-        state: ModelSessionState.loaded,
-        message: 'تم تحميل النموذج فعلياً وإنشاء سياق CPU بحجم $actualContext رمزاً. افتح صفحة المحادثة لتجربة التوليد المحلي.',
-        modelId: model.id,
-        modelFileBytes: _snapshot.modelFileBytes,
-        contextTokens: actualContext,
+      _activeModel = model;
+      _publish(_loadedSnapshot(
+        model,
+        actualContext,
+        'تم تحميل النموذج فعلياً وإنشاء سياق CPU بحجم $actualContext رمزاً.',
+        fileBytes: _snapshot.modelFileBytes,
       ));
       return _snapshot;
     } catch (error) {
+      if (_snapshot.needsRecovery) {
+        rethrow;
+      }
+      _activeModel = null;
       return _fail(model, 'فشل تحميل النموذج: $error');
+    } finally {
+      _endOperation();
+    }
+  }
+
+  /// Explicitly replaces the active model. The target is verified before the
+  /// current session is unloaded. If target loading fails, the previous model
+  /// is restored when possible; otherwise the manager enters recoveryRequired.
+  Future<ModelSessionSnapshot> switchTo(ModelRecord target) async {
+    _beginOperation();
+    final previousSnapshot = _snapshot;
+    final previousModel = _activeModel;
+    var previousUnloaded = false;
+    var targetLoadAttempted = false;
+    var targetLoaded = false;
+
+    try {
+      if (previousSnapshot.isLoaded && previousSnapshot.modelId == target.id) {
+        return previousSnapshot;
+      }
+
+      _publish(ModelSessionSnapshot(
+        state: ModelSessionState.checking,
+        message: 'جارٍ فحص النموذج الجديد قبل تغيير الجلسة الحالية…',
+        modelId: target.id,
+      ));
+      final prepared = await _inspectModel(target);
+      if (!prepared.isPrepared) {
+        final message = 'لم يبدأ التبديل: ${prepared.message}';
+        _publish(previousSnapshot.withMessage(message));
+        return _snapshot;
+      }
+      if (!_backend.isAvailable) {
+        if (previousSnapshot.isLoaded) {
+          _publish(previousSnapshot.withMessage(
+            'لم يبدأ التبديل؛ محرك التشغيل الأصلي غير متاح على هذه المنصة.',
+          ));
+        } else {
+          _publish(prepared.withMessage(
+            'اجتاز النموذج الفحص، لكن محرك التحميل الأصلي غير متاح.',
+          ));
+        }
+        return _snapshot;
+      }
+
+      if (previousSnapshot.isLoaded || previousSnapshot.needsRecovery) {
+        _publish(ModelSessionSnapshot(
+          state: ModelSessionState.switching,
+          message: 'جارٍ تفريغ الجلسة الحالية تمهيداً لتحميل النموذج الجديد…',
+          modelId: target.id,
+          modelFileBytes: prepared.modelFileBytes,
+          contextTokens: prepared.contextTokens,
+        ));
+        try {
+          await _backend.unload();
+          previousUnloaded = true;
+          _activeModel = null;
+        } catch (error) {
+          _publish(previousSnapshot.withMessage(
+            'تعذر تفريغ النموذج الحالي؛ لم يتم تحميل النموذج الجديد: $error',
+          ));
+          return _snapshot;
+        }
+      }
+
+      _publish(ModelSessionSnapshot(
+        state: ModelSessionState.loading,
+        message: 'تم تحرير الجلسة السابقة. جارٍ تحميل النموذج الجديد…',
+        modelId: target.id,
+        modelFileBytes: prepared.modelFileBytes,
+        contextTokens: prepared.contextTokens,
+      ));
+      targetLoadAttempted = true;
+      final actualContext = await _backend.load(
+        target,
+        contextTokens: prepared.contextTokens ?? _policy.contextTokens,
+        threads: _policy.cpuThreads,
+      );
+      targetLoaded = true;
+      if (!_isValidReturnedContext(actualContext)) {
+        throw StateError('أعاد المحرك حجم سياق خارج حدود السياسة: $actualContext.');
+      }
+
+      _activeModel = target;
+      _publish(_loadedSnapshot(
+        target,
+        actualContext,
+        'اكتمل التبديل وحُمّل النموذج الجديد على CPU بسياق $actualContext رمزاً.',
+        fileBytes: prepared.modelFileBytes,
+      ));
+      return _snapshot;
+    } catch (error) {
+      if (previousUnloaded && previousModel != null) {
+        try {
+          if (targetLoaded) {
+            await _backend.unload();
+          }
+          final restoredContext = await _backend.load(
+            previousModel,
+            contextTokens:
+                previousSnapshot.contextTokens ?? _policy.contextTokens,
+            threads: _policy.cpuThreads,
+          );
+          if (!_isValidReturnedContext(restoredContext)) {
+            throw StateError('أعاد المحرك سياقاً غير صالح أثناء استعادة النموذج السابق.');
+          }
+          _activeModel = previousModel;
+          _publish(_loadedSnapshot(
+            previousModel,
+            restoredContext,
+            'فشل تحميل النموذج الجديد ($error)، وتمت استعادة النموذج السابق بنجاح.',
+            fileBytes: previousSnapshot.modelFileBytes,
+          ));
+          return _snapshot;
+        } catch (restoreError) {
+          _activeModel = null;
+          _publish(ModelSessionSnapshot(
+            state: ModelSessionState.recoveryRequired,
+            message: 'فشل التبديل ($error) وتعذرت استعادة النموذج السابق ($restoreError). '
+                'لا تبدأ التوليد؛ نفّذ التفريغ لإعادة المحرك إلى حالة آمنة.',
+            modelId: target.id,
+            modelFileBytes: previousSnapshot.modelFileBytes,
+            contextTokens: null,
+          ));
+          return _snapshot;
+        }
+      }
+
+      if (previousSnapshot.isLoaded && !previousUnloaded) {
+        _publish(previousSnapshot.withMessage('لم يتم تغيير الجلسة الحالية: $error'));
+        return _snapshot;
+      }
+
+      if (targetLoadAttempted && targetLoaded) {
+        try {
+          await _backend.unload();
+        } catch (cleanupError) {
+          _activeModel = null;
+          _publish(ModelSessionSnapshot(
+            state: ModelSessionState.recoveryRequired,
+            message: 'فشل تحميل النموذج وتعذر التأكد من تحرير موارده ($cleanupError). '
+                'نفّذ التفريغ قبل أي محاولة أخرى.',
+            modelId: target.id,
+          ));
+          return _snapshot;
+        }
+      }
+      _activeModel = null;
+      return _fail(target, 'فشل تبديل النموذج: $error');
     } finally {
       _endOperation();
     }
@@ -275,25 +414,32 @@ class ModelRuntimeManager extends ChangeNotifier {
   Future<ModelSessionSnapshot> unload() async {
     _beginOperation();
     try {
-      if (_snapshot.state != ModelSessionState.loaded) {
+      if (_snapshot.state != ModelSessionState.loaded &&
+          !_snapshot.needsRecovery) {
         return _snapshot;
       }
+      final previous = _snapshot;
       _publish(ModelSessionSnapshot(
         state: ModelSessionState.unloading,
-        message: 'جارٍ تحرير سياق CPU وأوزان النموذج…',
-        modelId: _snapshot.modelId,
-        modelFileBytes: _snapshot.modelFileBytes,
-        contextTokens: _snapshot.contextTokens,
+        message: previous.needsRecovery
+            ? 'جارٍ إعادة المحرك إلى حالة آمنة…'
+            : 'جارٍ تحرير سياق CPU وأوزان النموذج…',
+        modelId: previous.modelId,
+        modelFileBytes: previous.modelFileBytes,
+        contextTokens: previous.contextTokens,
       ));
       await _backend.unload();
+      _activeModel = null;
       _publish(const ModelSessionSnapshot.idle());
       return _snapshot;
     } catch (error) {
-      // Keep the loaded state so the user can retry unloading. Never make the
-      // UI believe native model memory was released when it was not.
+      final wasRecovery = _snapshot.state == ModelSessionState.unloading &&
+          _activeModel == null;
       _publish(ModelSessionSnapshot(
-        state: ModelSessionState.loaded,
-        message: 'تعذر تفريغ النموذج؛ ما زالت الجلسة محمّلة. حاول التفريغ مجدداً: $error',
+        state: wasRecovery
+            ? ModelSessionState.recoveryRequired
+            : ModelSessionState.loaded,
+        message: 'تعذر تفريغ النموذج؛ لم يتم تأكيد تحرير موارد المحرك: $error',
         modelId: _snapshot.modelId,
         modelFileBytes: _snapshot.modelFileBytes,
         contextTokens: _snapshot.contextTokens,
@@ -305,11 +451,98 @@ class ModelRuntimeManager extends ChangeNotifier {
   }
 
   void resetPreparation() {
-    if (_operationInProgress || _snapshot.state == ModelSessionState.loaded) {
+    if (_operationInProgress ||
+        _generationInProgress ||
+        _snapshot.state == ModelSessionState.loaded ||
+        _snapshot.needsRecovery) {
       return;
     }
     _publish(const ModelSessionSnapshot.idle());
   }
+
+  Future<ModelSessionSnapshot> _inspectModel(ModelRecord model) async {
+    if (model.runtime != ModelRuntime.llamaCpp) {
+      return _failedSnapshot(model, 'هذا الإصدار يدعم تشغيل نماذج llama.cpp المحلية فقط.');
+    }
+    final verification = await _verifier.verify(model);
+    if (!verification.isValid) {
+      return _failedSnapshot(model, verification.message);
+    }
+    final actualSize = verification.actualSizeBytes ?? model.sizeBytes;
+    if (actualSize == null || actualSize <= 0) {
+      return _failedSnapshot(model, 'تعذر تحديد الحجم الفعلي لملف النموذج.');
+    }
+    final fileByteCeiling = _policy.maxModelFileBytes;
+    if (fileByteCeiling != null && actualSize > fileByteCeiling) {
+      return _failedSnapshot(
+        model,
+        'حجم الملف يتجاوز حد السياسة المخصص (${_formatBytes(fileByteCeiling)}).',
+      );
+    }
+    final requestedContext = _effectiveContextTokens(model);
+    if (requestedContext < 512) {
+      return _failedSnapshot(
+        model,
+        'السياق الأقصى المعلن للنموذج أقل من الحد الأدنى المدعوم (512 رمزاً).',
+      );
+    }
+    if (requestedContext > _policy.maxContextTokens) {
+      return _failedSnapshot(
+        model,
+        'حجم السياق المطلوب ($requestedContext) يتجاوز حد السياسة الحالي '
+        '(${_policy.maxContextTokens}) رمزاً.',
+      );
+    }
+    return ModelSessionSnapshot(
+      state: ModelSessionState.readyToLoad,
+      message: _backend.isAvailable
+          ? 'اجتاز الملف الفحص. سيُحمّل على CPU بسياق $requestedContext '
+              'رمزاً بعد فحص الذاكرة المتاحة.'
+          : 'اجتاز الملف الفحص، لكن محرك llama.cpp الأصلي غير متاح على هذه المنصة.',
+      modelId: model.id,
+      modelFileBytes: actualSize,
+      contextTokens: requestedContext,
+    );
+  }
+
+  Future<ModelSessionSnapshot> _recoverInvalidLoad(
+    ModelRecord model,
+    int actualContext,
+  ) async {
+    try {
+      await _backend.unload();
+    } catch (releaseError) {
+      _activeModel = model;
+      _publish(ModelSessionSnapshot(
+        state: ModelSessionState.loaded,
+        message: 'أعاد المحرك سياقاً خارج السياسة وتعذر تفريغه؛ ما زالت الجلسة محمّلة. '
+            'أعد محاولة التفريغ: $releaseError',
+        modelId: model.id,
+        modelFileBytes: _snapshot.modelFileBytes,
+        contextTokens: actualContext,
+      ));
+      return _snapshot;
+    }
+    _activeModel = null;
+    return _fail(model, 'أعاد المحرك حجم سياق غير صالح بعد التحميل.');
+  }
+
+  ModelSessionSnapshot _loadedSnapshot(
+    ModelRecord model,
+    int contextTokens,
+    String message, {
+    int? fileBytes,
+  }) =>
+      ModelSessionSnapshot(
+        state: ModelSessionState.loaded,
+        message: message,
+        modelId: model.id,
+        modelFileBytes: fileBytes ?? model.sizeBytes,
+        contextTokens: contextTokens,
+      );
+
+  bool _isValidReturnedContext(int value) =>
+      value >= 512 && value <= _policy.maxContextTokens;
 
   int _effectiveContextTokens(ModelRecord model) {
     final modelLimit = model.contextLength;
@@ -321,12 +554,15 @@ class ModelRuntimeManager extends ChangeNotifier {
         : _policy.contextTokens;
   }
 
+  ModelSessionSnapshot _failedSnapshot(ModelRecord model, String message) =>
+      ModelSessionSnapshot(
+        state: ModelSessionState.failed,
+        message: message,
+        modelId: model.id,
+      );
+
   ModelSessionSnapshot _fail(ModelRecord model, String message) {
-    _publish(ModelSessionSnapshot(
-      state: ModelSessionState.failed,
-      message: message,
-      modelId: model.id,
-    ));
+    _publish(_failedSnapshot(model, message));
     return _snapshot;
   }
 
@@ -334,13 +570,24 @@ class ModelRuntimeManager extends ChangeNotifier {
     if (_disposed) {
       throw StateError('مدير جلسة النموذج لم يعد نشطاً.');
     }
+    if (_generationInProgress) {
+      throw StateError('لا يمكن إدارة النموذج أثناء التوليد. أوقف التوليد أولاً.');
+    }
     if (_operationInProgress) {
       throw StateError('يوجد إجراء آخر لإدارة النموذج قيد التنفيذ.');
     }
     _operationInProgress = true;
   }
 
-  void _endOperation() => _operationInProgress = false;
+  void _endOperation() {
+    if (!_operationInProgress) {
+      return;
+    }
+    _operationInProgress = false;
+    if (!_disposed) {
+      notifyListeners();
+    }
+  }
 
   String _formatBytes(int bytes) {
     if (bytes >= 1024 * 1024 * 1024) {
