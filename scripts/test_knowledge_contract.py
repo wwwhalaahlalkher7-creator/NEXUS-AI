@@ -16,10 +16,10 @@ checks = {
     "single local text file picker": all(
         item in importer
         for item in (
-            "allowMultiple: false",
-            "withData: false",
-            "withReadStream: true",
+            "FilePicker.pickFile(",
             "allowedExtensions: const ['txt', 'md', 'markdown']",
+            "readAsByteStream()",
+            "lengthSync() ?? await file.length()",
         )
     ),
     "resource-aware file size and strict UTF-8": all(

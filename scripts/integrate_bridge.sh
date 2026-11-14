@@ -27,8 +27,8 @@ cp core/bridge/src/lib.rs "$backup_dir/bridge-lib.rs"
 cp -a core/bridge/src/api "$backup_dir/api"
 
 # The integration command creates rust_builder/ and may overlay sample files.
-flutter_rust_bridge_codegen integrate \\
-  --integration-backend cargokit \\
+flutter_rust_bridge_codegen integrate \
+  --integration-backend cargokit \
   --rust-crate-dir core/bridge
 
 # Restore the real NEXUS application and bridge sources; keep generated Cargokit.

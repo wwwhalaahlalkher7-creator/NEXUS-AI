@@ -126,7 +126,7 @@ GitHub Actions installs Android NDK `30.0.16248370` (r30 LTS), cross-compiles th
 
 The CI build is the authoritative compile check. A host-side C ABI contract test compiles the wrapper against a deliberately fake llama API to exercise load/unload, single-session behavior, prompt validation, generation streaming and cancellation callbacks, context overflow, memory rejection, and exported symbols; this is not an upstream llama.cpp compile. The pinned source must still be cross-compiled by GitHub Actions with the Android NDK, and the resulting APK must be smoke-tested on a physical ARM64 device.
 
-Flutter package version: `2.6.2+43`; Rust workspace version: `2.6.2`. SQLite database version: `10` (includes local resource settings, knowledge library, orchestration tables, paired devices, and durable peer task inbox/outbox).
+Flutter package version: `2.6.2+44`; Rust workspace version: `2.6.2`. SQLite database version: `10` (includes local resource settings, knowledge library, orchestration tables, paired devices, and durable peer task inbox/outbox). The `file_picker` dependency is pinned to the compatible v12 API line (`^12.3.0`) so its Windows implementation can resolve `win32` 6 alongside `flutter_secure_storage ^11.2.0`.
 
 See `docs/development/ALPHA_2_6_2_PEER_TASK_TRANSFER.md`,
 `docs/development/ALPHA_2_6_1_NETWORK_DISCOVERY_QR.md`,

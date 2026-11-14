@@ -38,15 +38,13 @@ class LocalGgufModelImportService implements ModelImportService {
 
   @override
   Future<ImportedModelFile?> importGguf(ModelRecord model) async {
-    final selected = await FilePicker.platform.pickFiles(
+    final selected = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const ['gguf'],
-      allowMultiple: false,
-      withData: false,
     );
-    if (selected == null || selected.files.isEmpty) return null;
+    if (selected == null) return null;
 
-    final sourcePath = selected.files.single.path;
+    final sourcePath = selected.path;
     if (sourcePath == null || sourcePath.isEmpty) {
       throw StateError('تعذر الحصول على مسار الملف من منتقي الملفات.');
     }

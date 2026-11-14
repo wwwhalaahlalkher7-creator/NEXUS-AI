@@ -7,35 +7,43 @@ import 'knowledge_document.dart';
 import 'knowledge_repository.dart';
 import '../resources/resource_settings.dart';
 
+typedef KnowledgeFilePicker = Future<PlatformFile?> Function({
+  required FileType type,
+  List<String>? allowedExtensions,
+});
+
 class KnowledgeImportService {
   KnowledgeImportService({
-    FilePicker? filePicker,
+    KnowledgeFilePicker? filePicker,
     ResourceSettingsRepository? settingsRepository,
     DeviceResourceMonitor? resourceMonitor,
-  })  : _filePicker = filePicker ?? FilePicker.platform,
+  })  : _filePicker = filePicker ?? _pickPlatformFile,
         _settingsRepository = settingsRepository ?? ResourceSettingsRepository(),
         _resourceMonitor = resourceMonitor ?? const DeviceResourceMonitor();
 
-  final FilePicker _filePicker;
+  final KnowledgeFilePicker _filePicker;
   final ResourceSettingsRepository _settingsRepository;
   final DeviceResourceMonitor _resourceMonitor;
+
+  static Future<PlatformFile?> _pickPlatformFile({
+    required FileType type,
+    List<String>? allowedExtensions,
+  }) =>
+      FilePicker.pickFile(type: type, allowedExtensions: allowedExtensions);
 
   Future<KnowledgeDocument?> pickAndImport(
     KnowledgeRepository repository,
   ) async {
-    final selection = await _filePicker.pickFiles(
+    final file = await _filePicker(
       type: FileType.custom,
       allowedExtensions: const ['txt', 'md', 'markdown'],
-      allowMultiple: false,
-      withData: false,
-      withReadStream: true,
     );
-    if (selection == null || selection.files.isEmpty) {
+    if (file == null) {
       return null;
     }
 
-    final file = selection.files.single;
-    if (file.size <= 0) {
+    final fileSize = file.lengthSync() ?? await file.length();
+    if (fileSize <= 0) {
       throw ArgumentError('The selected file is empty.');
     }
     final settings = await _settingsRepository.load();
@@ -43,7 +51,7 @@ class KnowledgeImportService {
         ? null
         : await _resourceMonitor.readSnapshot();
     final importBudget = settings.importBudgetBytes(snapshot);
-    if (importBudget != null && file.size > importBudget) {
+    if (importBudget != null && fileSize > importBudget) {
       throw ArgumentError(
         'حجم الملف أكبر من ميزانية الذاكرة المتاحة حالياً. '
         'اختر وضع الأداء أو المفتوح، أو حرّر الذاكرة ثم أعد المحاولة.',
@@ -60,26 +68,13 @@ class KnowledgeImportService {
   }
 
   Future<Uint8List> _readBoundedBytes(PlatformFile file, int? maxBytes) async {
-    final stream = file.readStream;
-    if (stream != null) {
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in stream) {
-        if (maxBytes != null && builder.length + chunk.length > maxBytes) {
-          throw ArgumentError('تجاوز الملف ميزانية الذاكرة التي خُصصت للاستيراد.');
-        }
-        builder.add(chunk);
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in file.readAsByteStream()) {
+      if (maxBytes != null && builder.length + chunk.length > maxBytes) {
+        throw ArgumentError('تجاوز الملف ميزانية الذاكرة التي خُصصت للاستيراد.');
       }
-      return builder.takeBytes();
+      builder.add(chunk);
     }
-    final bytes = file.bytes;
-    if (bytes == null) {
-      throw StateError(
-        'This Android file provider did not expose a readable stream.',
-      );
-    }
-    if (maxBytes != null && bytes.length > maxBytes) {
-      throw ArgumentError('تجاوز الملف ميزانية الذاكرة التي خُصصت للاستيراد.');
-    }
-    return bytes;
+    return builder.takeBytes();
   }
 }

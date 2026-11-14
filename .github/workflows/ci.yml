@@ -181,6 +181,7 @@ jobs:
           python3 scripts/test_peer_discovery_contract.py
           python3 scripts/test_peer_task_transfer_migration.py
           python3 scripts/test_peer_task_transfer_contract.py
+          python3 scripts/test_pub_dependency_compat.py
           python3 scripts/test_android_manifest_patch.py
 
       - name: Ensure cached Flutter Rust Bridge build tools
