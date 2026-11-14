@@ -23,7 +23,9 @@ class _CoreRuntimeCardState extends State<CoreRuntimeCard> {
   }
 
   void _retry() {
-    setState(() => _status = widget.service.inspect());
+    setState(() {
+      _status = widget.service.inspect();
+    });
   }
 
   Future<void> _clearContextMemory(CoreRuntimeStatus status) async {
